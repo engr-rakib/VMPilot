@@ -1,0 +1,207 @@
+#cloud-config
+hostname: ${hostname}
+fqdn: ${hostname}.${domain}
+ssh_authorized_keys:
+  - ${ssh_public_key}
+
+%{ if length(extra_users) > 0 }
+users:
+  - name: ubuntu
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: [sudo, adm]
+    lock_passwd: true
+%{ for u in extra_users ~}
+  - name: ${u.username}
+    passwd: ${u.password}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    groups: [sudo, adm]
+    lock_passwd: false
+%{ endfor ~}
+%{ endif }
+
+write_files:
+  - path: /etc/netplan/01-static.yaml
+    content: |
+      network:
+        version: 2
+        renderer: networkd
+        ethernets:
+%{ for i, net in networks ~}
+          ${net.match_name != "" ? net.match_name : "ens192"}:
+            dhcp4: ${net.dhcp}
+%{ if net.dhcp == false ~}
+            addresses:
+              - ${net.ip_address}/${net.netmask}
+            routes:
+              - to: default
+                via: ${net.gateway}
+                metric: ${100 + i}
+            nameservers:
+              addresses: ${jsonencode(net.dns_servers)}
+%{ endif ~}
+%{ endfor ~}
+
+bootcmd:
+  - systemctl mask systemd-networkd-wait-online.service 2>/dev/null || true
+  - swapoff /swapfile 2>/dev/null || true
+  - sed -i '\|/swapfile|d' /etc/fstab 2>/dev/null || true
+  - rm -f /swapfile /swap.img 2>/dev/null || true
+  # DNS wait retry — prevents package install failures
+  - |
+    for i in 1 2 3 4 5; do
+      ping -c1 -W2 archive.ubuntu.com >/dev/null 2>&1 && break
+      sleep 5
+    done
+%{ if disable_auto_updates }
+  - systemctl disable --now apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
+  - systemctl mask apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
+%{ endif }
+
+growpart:
+  mode: auto
+  devices: ["/"]
+  ignore_growroot_disabled: false
+
+resize_rootfs: true
+
+%{ if length(lvm_config) > 0 || length(mount_points) > 0 || length(os_partitions) > 0 }
+packages:
+%{ if length(lvm_config) > 0 || length(os_partitions) > 0 }
+  - lvm2
+  - cloud-guest-utils
+%{ endif }
+%{ if length(mount_points) > 0 }
+  - xfsprogs
+  - xfsdump
+%{ endif }
+
+runcmd:
+  - netplan apply
+%{ if length(os_partitions) > 0 }
+  - |
+    growpart /dev/sda 2 2>/dev/null || true
+    pvresize /dev/sda2
+%{ for part in os_partitions ~}
+%{ if part.mount_point == "/" }
+    lvextend -L ${part.size} /dev/vg_os/${part.lv_name}
+    resize2fs /dev/vg_os/${part.lv_name}
+%{ else }
+%{ if part.mount_point == "swap" }
+    if ! lvs /dev/vg_os/${part.lv_name} &>/dev/null; then
+      lvcreate -L ${part.size} -n ${part.lv_name} vg_os
+    else
+      echo "LV ${part.lv_name} already exists, skipping"
+    fi
+    mkswap /dev/vg_os/${part.lv_name}
+    swapon /dev/vg_os/${part.lv_name}
+    echo '/dev/vg_os/${part.lv_name} none swap sw 0 0' >> /etc/fstab
+%{ else }
+    if ! lvs /dev/vg_os/${part.lv_name} &>/dev/null; then
+      lvcreate -L ${part.size} -n ${part.lv_name} vg_os
+    else
+      echo "LV ${part.lv_name} already exists, skipping"
+    fi
+    mkfs.${part.filesystem} /dev/vg_os/${part.lv_name}
+    ORIG_PERMS=$(stat -c "%a" ${part.mount_point} 2>/dev/null || echo "755")
+    TMP_MNT="/mnt/tmp_${part.lv_name}"
+    mkdir -p "$TMP_MNT"
+    mount /dev/vg_os/${part.lv_name} "$TMP_MNT"
+    cp -a ${part.mount_point}/. "$TMP_MNT/" 2>/dev/null || true
+    umount "$TMP_MNT"
+    rmdir "$TMP_MNT" 2>/dev/null || true
+    mkdir -p ${part.mount_point}
+    mount /dev/vg_os/${part.lv_name} ${part.mount_point}
+    chmod "$ORIG_PERMS" ${part.mount_point}
+    echo '/dev/vg_os/${part.lv_name} ${part.mount_point} ${part.filesystem} defaults 0 2' >> /etc/fstab
+%{ endif }
+%{ endif }
+%{ endfor ~}
+%{ endif }
+%{ if ! os_has_swap }
+  - |
+    if [ ! -f /swapfile ]; then
+      fallocate -l ${memory_mb * 3 / 2}M /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=${memory_mb * 3 / 2}
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+%{ endif }
+%{ if length(lvm_config) > 0 }
+  - |
+    DEVICES="${join(" ", distinct(flatten([for lv in lvm_config : lv.devices])))}"
+    for d in $DEVICES; do
+      pvcreate -ff -y $d 2>/dev/null || true
+    done
+%{ for vg in distinct([for lv in lvm_config : lv.vg_name]) ~}
+    vgcreate ${vg} $DEVICES 2>/dev/null || true
+%{ endfor ~}
+%{ for lv in lvm_config ~}
+    if ! lvs /dev/${lv.vg_name}/${lv.lv_name} &>/dev/null; then
+      lvcreate -L ${lv.lv_size} -n ${lv.lv_name} ${lv.vg_name}
+    else
+      echo "LV ${lv.lv_name} already exists, skipping"
+    fi
+%{ endfor ~}
+%{ for lv in lvm_config ~}
+  - |
+    mkfs.${lv.filesystem} /dev/${lv.vg_name}/${lv.lv_name}
+    ORIG_PERMS=$(stat -c "%a" ${lv.mount_point} 2>/dev/null || echo "755")
+    TMP_MNT="/mnt/tmp_${lv.lv_name}"
+    mkdir -p "$TMP_MNT"
+    mount /dev/${lv.vg_name}/${lv.lv_name} "$TMP_MNT"
+    cp -a ${lv.mount_point}/. "$TMP_MNT/" 2>/dev/null || true
+    umount "$TMP_MNT"
+    rmdir "$TMP_MNT" 2>/dev/null || true
+    mkdir -p ${lv.mount_point}
+    mount /dev/${lv.vg_name}/${lv.lv_name} ${lv.mount_point}
+    chmod "$ORIG_PERMS" ${lv.mount_point}
+    echo '/dev/${lv.vg_name}/${lv.lv_name} ${lv.mount_point} ${lv.filesystem} defaults 0 2' >> /etc/fstab
+%{ endfor ~}
+%{ endif }
+%{ if length(mount_points) > 0 }
+%{ for mp in mount_points ~}
+  - |
+    sleep 1
+%{ if mp.filesystem == "swap" }
+    mkswap ${mp.device}
+    swapon ${mp.device}
+    echo '${mp.device} none swap sw 0 0' >> /etc/fstab
+%{ else }
+    mkfs.${mp.filesystem} -f ${mp.device}
+    mkdir -p ${mp.mount_point}
+    mount ${mp.device} ${mp.mount_point}
+    echo '${mp.device} ${mp.mount_point} ${mp.filesystem} defaults 0 2' >> /etc/fstab
+%{ endif }
+%{ endfor ~}
+%{ endif }
+%{ if length(extra_users) > 0 }
+  # Extra users created via cloud-init users module above — no runcmd needed
+%{ endif }
+%{ if enable_node_exporter }
+  - |
+    if [ ! -f /usr/local/bin/node_exporter ]; then
+      wget -qO /tmp/ne.tar.gz https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
+      tar -xzf /tmp/ne.tar.gz -C /tmp/
+      install -m 0755 /tmp/node_exporter-1.8.2.linux-amd64/node_exporter /usr/local/bin/node_exporter
+      cat > /etc/systemd/system/node_exporter.service <<'SVC'
+[Unit]
+Description=Prometheus Node Exporter
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/node_exporter
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+SVC
+      systemctl daemon-reload
+      systemctl enable --now node_exporter
+      rm -rf /tmp/node_exporter-* /tmp/ne.tar.gz
+    fi
+%{ endif }
+%{ endif }

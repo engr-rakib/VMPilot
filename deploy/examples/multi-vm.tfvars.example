@@ -1,0 +1,66 @@
+# ═══════════════════════════════════════════════════════════════
+# Master Config Example — deploy/<env>/deploy.tfvars
+# ═══════════════════════════════════════════════════════════════
+# Usage:
+#   terraform apply -var-file="deploy/dev/deploy.tfvars"
+#
+# Each key under vm_configs = one VM. Add as many as you need.
+# Shared config (datacenter, cluster, network, etc.) goes here too.
+# New VMs merge here automatically via scripts/create-vm-config.sh
+# ═══════════════════════════════════════════════════════════════
+
+# ─── Shared Config (applies to all VMs) ──────────────────────
+datacenter = "Datacenter"
+cluster    = "Cluster"
+datastore  = "datastore01"
+network    = "VM Network"
+template   = "ubuntu-24-template"
+
+ssh_public_key = "ssh-ed25519 AAAAC3..."
+
+# ─── VM Configs (for_each) ───────────────────────────────────
+vm_configs = {
+  prod_app = {
+    hostname    = "accesspilot-prod"
+    ip_address  = "198.51.100.110"
+    gateway     = "198.51.100.1"
+    cpu         = 4
+    memory      = 8192
+    disk_size   = 80
+
+    ipam_enabled         = false
+    netmask              = 24
+    dns_servers          = ["198.51.100.10", "8.8.8.8"]
+    folder               = "/accesspilot/vm/prod"
+    annotation           = "Production AccessPilot VM"
+    disable_auto_updates = true
+    enable_node_exporter = true
+
+    os_partitions = [
+      { mount_point = "/",    size = "8G" },
+      { mount_point = "/var", size = "10G" },
+      { mount_point = "swap", size = "4G" },
+    ]
+  }
+
+  accesspilot_test = {
+    hostname    = "accesspilot-test"
+    ip_address  = "198.51.100.111"
+    gateway     = "198.51.100.1"
+    cpu         = 2
+    memory      = 4096
+    disk_size   = 60
+
+    ipam_enabled = false
+    netmask      = 24
+    dns_servers  = ["198.51.100.10", "8.8.8.8"]
+    folder       = "/accesspilot/vm/test"
+    annotation   = "Test AccessPilot VM"
+
+    os_partitions = [
+      { mount_point = "/",    size = "8G" },
+      { mount_point = "/var", size = "10G" },
+      { mount_point = "swap", size = "2G" },
+    ]
+  }
+}

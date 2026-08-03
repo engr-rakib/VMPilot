@@ -1,0 +1,36 @@
+# Terraform state files
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Secure credentials
+secure/
+
+# IPAM state files
+*.ip
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI output
+*.tfplan
+*.tfplan.*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# secure/ is encrypted secrets — README is safe to commit
+secure/*
+!secure/README.md
+
+# plaintext staging area for sops-encrypt.sh — never commit
+.tmp-sops-plain/

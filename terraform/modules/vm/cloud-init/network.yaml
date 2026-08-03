@@ -1,0 +1,24 @@
+version: 2
+ethernets:
+%{ for i, net in networks ~}
+  nic${i}:
+%{ if net.match_mac != "" }
+    match:
+      macaddress: "${net.match_mac}"
+%{ else ~}
+    match:
+      name: "${net.match_name != "" ? net.match_name : "e*" }"
+%{ endif ~}
+    set-name: "nic${i}"
+    dhcp4: ${net.dhcp}
+%{ if net.dhcp == false }
+    addresses:
+      - ${net.ip_address}/${net.netmask}
+    routes:
+      - to: default
+        via: ${net.gateway}
+        metric: ${100 + i}
+    nameservers:
+      addresses: ${jsonencode(net.dns_servers)}
+%{ endif }
+%{ endfor ~}
