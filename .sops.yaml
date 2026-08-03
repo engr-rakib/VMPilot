@@ -1,0 +1,9 @@
+creation_rules:
+  - path_regex: secure/.*\.tfvars$
+    age: age1gka0npw4cldxsv5hfsqj23d94y846qzur9xlq8kds0xeehu5cajs8hnm30
+
+  - path_regex: secure/.*$
+    age: age1gka0npw4cldxsv5hfsqj23d94y846qzur9xlq8kds0xeehu5cajs8hnm30
+
+  - path_regex: \.tmp-sops-plain/.*\.tfvars$
+    age: age1gka0npw4cldxsv5hfsqj23d94y846qzur9xlq8kds0xeehu5cajs8hnm30
