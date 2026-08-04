@@ -1,158 +1,171 @@
-# GitHub Setup & Usage Guide (Noob-Friendly)
+# GitHub Setup & Usage Guide
 
-Ei project ke GitHub-এ rakhte hobe **version control** + **CI/CD** er jonno. Ei guide ti noob-er jonno — step by step, browser + terminal dui theke'i.
-
----
-
-## কয়েকটা কথাই আগে (আমি কে, কেন GitHub)
-
-| শব্দ | মানে |
-|------|------|
-| **Git** | আপনার কম্পিউটারে version tracking — project file-change গুলোর history রাখে |
-| **GitHub** | Internet-এ Git repo hosting (backup + sharing) |
-| **Repository (repo)** | আপনার project er folder, যেটা GitHub-এ online |
-| **Commit** | "পরিবর্তন সেভ" — একটা snapshot |
-| **Push** | আপনার local commit গুলো GitHub-এ পাঠানো |
-| **Pull** | GitHub-হতে changes নেওয়া (আপনার machine-এ) |
-| **Clone** | GitHub-হতে নতুন copy দূরে name setup |
-
-**কেন করবো?** file backup, যেকোনো জায়গা থেকে code দেখা, change history, কেউ error করলে undo, এবং CI (auto-check)।
+This repository is managed on GitHub for **version control** and **CI (automated checks)**. This guide explains how to connect the repository, commit and push changes, and use the available CI facilities. It is written for both new and existing contributors.
 
 ---
 
-## ⚠️ প্রথমেই security নিয়ম (সবচেয়ে গুরুত্বপূর্ণ)
+## Table of Contents
 
-এই project-এ Secret file গুলো (`terraform.tfstate`, `secure/**/*.tfvars`) GitHub-এ **NEVER push করা হয়**।
+- [Terminology](#terminology)
+- [Security Rules (Read First)](#security-rules-read-first)
+- [One-Time Setup](#one-time-setup)
+- [Daily Workflow](#daily-workflow)
+- [Commit Guidelines](#commit-guidelines)
+- [CI / CD (GitHub Actions)](#ci--cd-github-actions)
+- [Re-Enabling the CI Workflow](#re-enabling-the-ci-workflow)
+- [Troubleshooting](#troubleshooting)
+- [FAQ](#faq)
+- [Pre-Push Checklist](#pre-push-checklist)
 
-`.gitignore` file already ঠিক করা আছে — এটাই auto-রূপে নিষেধ করে।
+---
 
-| ফাইল | GitHub-এ যাবে? | কারণ |
+## Terminology
+
+| Term | Meaning |
+|------|---------|
+| **Git** | Local version control — records history of file changes |
+| **GitHub** | Online hosting for Git repositories (backup + collaboration) |
+| **Repository (repo)** | The project folder, hosted online |
+| **Commit** | A saved snapshot of changes |
+| **Push** | Send local commits to GitHub |
+| **Pull** | Fetch the latest changes from GitHub |
+| **Clone** | Create a local copy of a GitHub repository |
+
+---
+
+## Security Rules (Read First)
+
+This project contains **sensitive files that must never be pushed** to GitHub. The `.gitignore` has been configured to block them automatically.
+
+| File / Path | Pushed? | Reason |
 |------|:---:|------|
-| `deploy/*/vm-*.tfvars` | ✅ হ্যাঁ | ssh public key only, safe |
-| `terraform/` (.tf code) | ✅ হ্যাঁ | code, secret নয় |
-| `docs/`, `scripts/` | ✅ হ্যাঁ | docs + script |
-| `terraform.tfstate*` | ❌ না | vCenter password তথ্য |
-| `secure/` | ❌ না | vcenter password (encrypted) |
-| `.terraform/` | ❌ না | local cache |
-| `*.tfplan` | ❌ না | state backup |
+| `deploy/*/vm-*.tfvars` | ✅ Yes | Contains SSH public key + VM metadata only (safe) |
+| `terraform/` (`.tf` source) | ✅ Yes | Infrastructure code, no secrets |
+| `docs/`, `scripts/` | ✅ Yes | Documentation and tooling |
+| `terraform.tfstate*` | ❌ No | Contains vCenter credentials/IPAM state |
+| `secure/` | ❌ No | Encrypted vCenter credentials |
+| `.terraform/` | ❌ No | Local provider cache |
+| `*.tfplan` | ❌ No | Pre-generated plans / state backups |
 
-> **গোল্ডেন রুল:** Push ধরার আগে `git status` run করে দেখো — যেন `secure/` বা `*.tfstate` না দেখাও। নিচে Checklist section-এ ধাপ দেয়া আছে.
+> **Golden rule:** Before every push, run `git status` and confirm that no `secure/` or `*.tfstate` file appears in the staged list.
 
 ---
 
-## Setup (একবার) — প্রথমবার GitHub-এ connection
+## One-Time Setup
 
-### Step 1: GitHub Account বানাও
-- 💻 [github.com](https://github.com) → **Sign up** → username + email + password
-- (আমার username: `engr-rakib`, repo: `terraform-lab`)
+### Step 1: Create a GitHub Account
+- Go to [github.com](https://github.com) → **Sign up** → username, email, password.
+- Note the repository details used in this project:
+  - Owner: `engr-rakib`
+  - Repository: `terraform-lab`
 
-### Step 2: Git install
+### Step 2: Install Git
 ```bash
-# Debian/Ubuntu
+# Debian / Ubuntu
 sudo apt update && sudo apt install git -y
 
-# verify
+# Verify
 git --version
 ```
 
-### Step 3: Git-এ আপনার identity set করা (একবার)
-```
+### Step 3: Configure Git Identity (once)
+```bash
 git config --global user.name "engr-rakib"
 git config --global user.email "youremail@example.com"
 ```
 
-### Step 4: GitHub-এ repo create (browser)
-1. যাও `github.com/new`
-2. Repository name: `terraform-lab` → **Public** select
-3. **Create repository** (kono checkbox নয় — empty repo)
-4. এখন একটি URL পাবে: `https://github.com/engr-rakib/terraform-lab.git`
+### Step 4: Create the Repository (browser)
+1. Go to `github.com/new`.
+2. Repository name: `terraform-lab` → visibility: **Public**.
+3. Click **Create repository** (leave all "initialize" checkboxes unticked — the repo must be empty).
+4. Note the URL: `https://github.com/engr-rakib/terraform-lab.git`.
 
-### Step 5: Token তৈরি (browser) — push করতে লাগবে
-1. [github.com/settings/tokens/new](https://github.com/settings/tokens/new)
-2. Note: `project01-push`
-3. **Expiration:** `90 days` (best practice — finite)
-4. **Scopes:** 🎯 এই দুটা checkbox চেক করো:
-   - ☑ `repo` (push হবে)
-   - ☑ `workflow` (CI workflow file push-এ লাগবে — `.github/workflows/`)
-5. **Generate token** → `ghp_...` copy। 
-   > **জরুরী:** এইটাকে কেও দেখবে না। কোথাও ভাগে না। কাজ শেষে revoke করো!
+### Step 5: Create an Access Token (browser)
+Tokens are required to authenticate `git push` over HTTPS.
 
-### Step 6: Local repo → GitHub (One time)
-```
-# project directory-তে enter
+1. Open [github.com/settings/tokens/new](https://github.com/settings/tokens/new).
+2. **Note:** `project01-push`.
+3. **Expiration:** `90 days` (recommended — finite lifetime is more secure).
+4. **Scopes** — select **both** checkboxes:
+   - ☑ `repo` (required for pushing code)
+   - ☑ `workflow` (required to push `.github/workflows/` CI files)
+5. Click **Generate token**, then copy the `ghp_...` value.
+   > ⚠️ Treat this like a password. Never share it, do not commit it, and revoke it once it is no longer needed.
+
+### Step 6: Connect the Local Repository (once)
+```bash
 cd /opt/terraform-lab/projects/project01
 
-# remote যোগ করো (token example — আপনি নিজের token ব্যবহার)
+# Add the remote (replace <YOUR_TOKEN> with your token)
 git remote add origin https://<YOUR_TOKEN>@github.com/engr-rakib/terraform-lab.git
 
-# first push
+# First push
 git push -u origin main
 ```
 
-> `-u origin main` মানে — এখন থেকে just `git push` লিখলেই যথেষ্ট।
+The `-u origin main` flags set upstream tracking, so subsequent pushes are just `git push`.
 
 ---
 
-## Daily Workflow (প্রতিবার)
+## Daily Workflow
 
-নিয়মিত কাজ করি — change, add VM, edit script — তাহলে:
+After any change — adding a VM, editing a script, updating docs:
 
 ```bash
 cd /opt/terraform-lab/projects/project01
 
-# ১) কোন file change হয়েছে দেখো
+# 1) Review what changed
 git status
 
-# ২) specific file add (বা সব: git add .)
+# 2) Stage specific files (or use: git add . for everything)
 git add filename.tf
 git add scripts/deploy-vm.sh
 
-# ৩) commit (message বুঝানো — কী করলি)
-git commit -m "Add VM web-04 config"
+# 3) Commit with a meaningful message
+git commit -m "Add deploy config for web-04"
 
-# ৪) github-এ পাঠাও
+# 4) Push to GitHub
 git push
 ```
 
-তাড়াতাড়ি shortcut:
+Quick shortcut for all changes:
 ```
-git add -A                    # সব change stage
-git commit -m "message"       # commit
-git push                      # GitHub-এ পাঠানো
+git add -A
+git commit -m "message"
+git push
 ```
 
 ---
 
-## বেস্ট commit rules (Noob hack)
+## Commit Guidelines
 
-1. **Commit message ছোট কিন্তু মানে বুঝা যায়:**
-   - ❌ `update` 
+1. **Write meaningful, concise commit messages:**
+   - ❌ `update`
    - ✅ `Add deploy config for web-04`
-2. **একটা logical change –এ একটা commit**
-3. **সব না, নথি না যোগ করি** — আগে `git status` দেখো
-4. **Secret যোগ করো না** — (মনে রাখো `.gitignore` already আছে)
+2. **One logical change per commit.**
+3. **Stage selectively** — review `git status` before adding, rather than blindly adding everything.
+4. **Never stage secrets** — the `.gitignore` already covers most, but always verify with `git status`.
 
 ---
 
-## CI/CD What-Why (GitHub Actions)
+## CI / CD (GitHub Actions)
 
-repo-এ `workflow` scope token থাকলে এই auto-এর বৈচিত্র্য (validate + security) GitHub-এ হবে।
-তবে **deploy নয়**, কারণ vCenter private network-এ আছে।
+The repository includes a CI workflow (`.github/workflows/terraform-ci.yml`) that runs on every push and PR against `main`:
 
-- **GitHub-hosted runner** = private vCenter (`192.0.2.10`) reach করবে না।
-- তাই GitHub Actions দিয়ে শুধু **CI (check)** করা যায়, deploy নয়।
-- 🎯 এর সুবিধা: code-check (`terraform fmt`, `validate`) + security scan (tflint/tfsec/checkov) — প্রতিবার push-এ auto।
+- **`validate` job** — `terraform fmt -check`, `terraform init -backend=false`, `terraform validate`.
+- **`security` job** — `tflint`, `tfsec`, and `checkov` static scans.
 
-যদি deploy চাও GitHub-দিয়ে, তাহলে দরকার: **self-hosted runner** (এই Terraform server-এ)।
-এটা extra setup — এই guide-এর বাইরে।
+> **Deployment limitation:** GitHub-hosted runners cannot reach the private vCenter (`192.0.2.10`). Therefore **CI (code quality + security checks) runs automatically, but deployment does not**. To deploy from GitHub, a **self-hosted runner** on the Terraform server would be required — that is an additional setup outside the scope of this guide.
 
-### CI workflow file আবার যোগ করা (ঐচ্ছিক)
+---
 
-এই project-এ `.github/workflows/terraform-ci.yml` আছে। এই file push করার সময় token-এ `workflow` scope লাগে।
+## Re-Enabling the CI Workflow
+
+The workflow file requires a token with the `workflow` scope. If it is not currently in the repository, restore and push it as follows:
 
 ```bash
-git checkout origin/main -- .github/workflows/terraform-ci.yml   # local-এ ফিরিয়ে আনা
-# অথবা পুরনো commit থেকে
+git checkout origin/main -- .github/workflows/terraform-ci.yml   # restore locally
+# or from an older commit:
 git show <commit>:.github/workflows/terraform-ci.yml > .github/workflows/terraform-ci.yml
 
 git add .github/workflows/terraform-ci.yml
@@ -160,40 +173,38 @@ git commit -m "Re-enable GitHub Actions CI"
 git push
 ```
 
-`workflow` scope-যুক্ত token না থাকলে push reject হবে — তখন টোকেনে scope যোগ করে নতুন token বানাও।
+If the push is rejected with a `workflow` scope error, generate a new token that includes the `workflow` scope and update the remote URL.
 
 ---
 
-## সমস্যা হলে (Troubleshooting)
+## Troubleshooting
 
-| **Error** | **কখন হয়** | **সমাধান** |
+| Error | Likely Cause | Solution |
 |---|---|---|
-| `Authentication failed` | token ভুল/মেয়াদ শেষ | নতুন token → `git remote set-url` |
-| `Missing required scope 'read:org'` | gh দিয়ে login | gh-এ push না করে; git token-এ push |
-| `refusing to allow ... workflow` | token-এ `workflow` scope নাই | token-এ `workflow` scope যোগ করো |
-| পুশ হচ্ছে না secret file | .gitignore কাজ করছে না | `git rm --cached <file>` → আবার push |
-| `push rejected` | কেউ আগে push করেছে | `git pull` → merge → `git push` |
+| `Authentication failed` | Token expired or incorrect | Generate a new token, then `git remote set-url origin https://<TOKEN>@github.com/...` |
+| `Missing required scope 'read:org'` | Attempted `gh` login flow | Push with a `git`-level token instead of `gh` |
+| `Refusing to allow ... workflow` | Token lacks `workflow` scope | Create a token that includes `workflow` scope |
+| Secret file still staged | `.gitignore` not catching it | `git rm --cached <file>` then push again |
+| `push rejected` | Remote has commits you don't have | `git pull` → resolve conflicts → `git push` |
 
 ---
 
-## Frequently Asked
+## FAQ
 
-- **টোকেন হারিয়ে ফেললাম** — revoke → নতুন token বানাও
-- **public repo-তে নিরাপত্তা?** — `secure/` + `tfstate` push হয় না; শুধু VM config (public key) যায়
-- **আর কী কী শিখতে হবে** — commit/push workflow-ই যথেষ্ট
-- **অন্য জায়গায় copy** — `git clone https://github.com/engr-rakib/terraform-lab.git`
-
----
-
-## Checklist — প্রতিটি push-এর আগে
-
-1. `git status` → kono secret file নেই
-2. Token নিজের কাছে (git remote-এ আছে, আর কোথাও না)
-3. Commit message স্পষ্ট (meaning)
-4. `git push`
-
-সব ঠিক থাকলে — 👍
+- **I lost my token.** — Revoke it on GitHub and generate a new one.
+- **Is it safe that the repo is public?** — Yes: `secure/` and `terraform.tfstate*` are never pushed; only VM configs (containing SSH public keys) are exposed.
+- **What else do I need to learn?** — This commit → push workflow covers day-to-day contribution. See `docs/` for project-specific operations.
+- **How do I get a copy elsewhere?** — `git clone https://github.com/engr-rakib/terraform-lab.git`
 
 ---
 
-> **Note:** এটা shortcut guide। আরো বিস্তারিত দেখো [docs/](docs/README.md) এবং [operator-guide](docs/operator-guide/operator-guide.md)।
+## Pre-Push Checklist
+
+1. `git status` — no secret file is staged.
+2. Token is kept private (present in the git remote only, committed nowhere).
+3. Commit message is clear and meaningful.
+4. `git push` succeeds without error.
+
+---
+
+> **Note:** This is a quick-start guide. For detailed operations, see [docs/](docs/README.md) and the [operator guide](docs/operator-guide/operator-guide.md).
