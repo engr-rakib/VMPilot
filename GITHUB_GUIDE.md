@@ -130,7 +130,7 @@ git push                      # GitHub-এ পাঠানো
    - ✅ `Add deploy config for web-04`
 2. **একটা logical change –এ একটা commit**
 3. **সব না, নথি না যোগ করি** — আগে `git status` দেখো
-4. **Secret কভার করো না** — (মনে রাখো `.gitignore` already আছে)
+4. **Secret যোগ করো না** — (মনে রাখো `.gitignore` already আছে)
 
 ---
 
