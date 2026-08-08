@@ -305,7 +305,5 @@ New to all of this? Follow exactly this order.
 
 ## Related documents
 
-- [Client Features & How It Works](docs/client-features.md)
-- [New Terraform Server Setup](docs/project-structure/new-terraform-server.md)
+- [Requirements & installation](REQUIREMENTS.md)
 - [Secure/ — encrypted credentials guide](secure/README.md)
-- [Operator Guide](docs/operator-guide/operator-guide.md)
