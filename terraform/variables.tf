@@ -60,6 +60,12 @@ variable "tags" {
 }
 
 # ─── VM Configs (Multi-VM mode) ─────────────────────────────────────────
+variable "ipam_base_ip" {
+  description = "IPAM fallback scan start (first IP tried when no config pin). Per-vCenter — set in each deploy/<vcenter>/<env>/ per-VM file."
+  type        = string
+  default     = "198.51.100.10"
+}
+
 variable "vm_configs" {
   description = "Map of VM configs. Each key = VM name."
   type = map(object({

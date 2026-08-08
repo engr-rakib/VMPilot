@@ -1,8 +1,8 @@
 # ═══════════════════════════════════════════════════════════════
-# Master Config Example — deploy/<env>/deploy.tfvars
+# Master Config Example — deploy/<vcenter>/<env>/vm-*.tfvars
 # ═══════════════════════════════════════════════════════════════
 # Usage:
-#   terraform apply -var-file="deploy/dev/deploy.tfvars"
+#   terraform apply -var-file="deploy/dc_pilot_192.0.2.10/dev/vm-web-02_198.51.100.113.tfvars"
 #
 # Each key under vm_configs = one VM. Add as many as you need.
 # Shared config (datacenter, cluster, network, etc.) goes here too.

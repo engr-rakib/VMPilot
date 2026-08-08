@@ -14,14 +14,15 @@ set -euo pipefail
 # ───────────────────────────────────────────────────────────────────────────
 #   ./scripts/create-vm-config.sh                    # fully interactive
 #   ./scripts/create-vm-config.sh myvm               # name preset
-#   ./scripts/create-vm-config.sh myvm prod          # name + env preset
+#   ./scripts/create-vm-config.sh <vcenter> <env> myvm   # vCenter + env preset
 #
-#   Output: deploy/<env>/vm-<name>_<ip>.tfvars  (per-VM config — self-contained)
+#   Output: deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars  (per-VM config)
 #           Existing VMs in the file are never touched.
+#           Per-vCenter defaults auto-load from secure/<vcenter>/vcenter.tfvars.
 #
 #   After generation — review & deploy:
-#     vi deploy/<env>/vm-<name>_<ip>.tfvars   # uncomment what you need
-#     bash scripts/deploy-vm.sh <env> <name>   # deploy THIS VM only
+#     vi deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars   # uncomment what you need
+#     bash scripts/deploy-vm.sh <vcenter> <env> <name>  # deploy THIS VM only
 #
 #   Add more VMs by running this script again — each VM gets its own file.
 #
@@ -43,15 +44,6 @@ CONF_FILE="${SCRIPT_DIR}/vm-defaults.conf"
 if [ -f "$CONF_FILE" ]; then
   set -a; source "$CONF_FILE"; set +a
 fi
-: "${DEFAULT_DOMAIN:=example.local}"
-: "${DEFAULT_DATACENTER:=dc_pilot}"
-: "${DEFAULT_CLUSTER:=primary_cluster}"
-: "${DEFAULT_DATASTORE:=datastore01}"
-: "${DEFAULT_NETWORK:=VM Network}"
-: "${DEFAULT_TEMPLATE:=ubuntu-24-template}"
-: "${DEFAULT_BASE_IP:=198.51.100.10}"
-: "${DEFAULT_GATEWAY:=198.51.100.1}"
-: "${DEFAULT_NETMASK:=24}"
 : "${DEFAULT_CPU:=2}"
 : "${DEFAULT_RAM:=4}"
 : "${DEFAULT_FIRMWARE:=efi}"
@@ -65,7 +57,6 @@ fi
 : "${DEFAULT_EXTRA_USER_PASSWORD:=}"
 : "${DEFAULT_DISABLE_AUTO_UPDATES:=Y}"
 : "${DEFAULT_SWAP:=N}"
-if [ -z "${DEFAULT_DNS[*]:-}" ]; then DEFAULT_DNS=("203.0.113.53" "203.0.113.54"); fi
 if [ -z "${DEFAULT_MOUNTS[*]:-}" ]; then DEFAULT_MOUNTS=("/:10" "/home:5" "/var:15" "/tmp:2"); fi
 info "Defaults: scripts/vm-defaults.conf${CONF_FILE:+ (loaded)}"
 
@@ -90,35 +81,141 @@ while true; do
 done
 VM_NAME="${VM_NAME//_/-}"
 ok_inline "Name: ${VM_NAME}"
+
+# vCenter + environment
+# Layout: deploy/<vcenter>/<env>/vm-*.tfvars ; creds/inventory in secure/<vcenter>/.
+# A vCenter = top-level deploy/<vcenter>/ dir that contains env SUB-directories
+# (dev/prod/staging/...). Legacy flat env dirs (deploy/dev, secure/dev — the old
+# layout kept parallel) have no env subdirs and are NOT treated as vCenters.
+info "vCenter"
+VCENTERS=()
+for d in "${SCRIPT_DIR}"/../deploy/*/; do
+  [ -d "$d" ] || continue
+  v=$(basename "$d")
+  [ "$v" = "examples" ] && continue
+  ls -d "${d}"*/ >/dev/null 2>&1 || continue
+  [[ " ${VCENTERS[*]} " == *" $v "* ]] || VCENTERS+=("$v")
+done
+if [ "${#VCENTERS[@]}" -eq 0 ]; then
+  die "No vCenter configured yet — run: bash scripts/vcenter-setup.sh   (creates deploy/<vcenter>/ + secure/<vcenter>/)"
+fi
+i=1
+for v in "${VCENTERS[@]}"; do echo "  $i) $v"; i=$((i+1)); done
+echo "  $i) Create NEW vCenter (run vcenter-setup.sh)"
+read -rp "$(echo -e "${CYAN}Select vCenter${NC} [1]: ")" vc_sel
+vc_sel="${vc_sel:-1}"
+if [ "$vc_sel" = "$i" ]; then
+  echo "  New vCenter: run bash scripts/vcenter-setup.sh first, then re-run this script."
+  exit 1
+fi
+VCENTER="${VCENTERS[$((vc_sel-1))]:-}"
+[ -n "$VCENTER" ] || die "Invalid vCenter selection."
+mkdir -p "${SCRIPT_DIR}/../deploy/${VCENTER}"
+info "vCenter: ${VCENTER}"
+
+info "Environment (on ${VCENTER})"
+# Env sub-dirs under deploy/<vcenter>/ (dev/prod/staging/qa/...) → pick or create.
+ENVS=()
+for d in "${SCRIPT_DIR}"/../deploy/"${VCENTER}"/*/; do
+  [ -d "$d" ] || continue
+  e=$(basename "$d")
+  [[ " ${ENVS[*]} " == *" $e "* ]] || ENVS+=("$e")
+done
+i=1
+for e in "${ENVS[@]}"; do echo "  $i) $e"; i=$((i+1)); done
+echo "  $i) Create NEW environment"
+read -rp "$(echo -e "${CYAN}Select${NC} [1]: ")" env_sel
+env_sel="${env_sel:-1}"
+if [ "$env_sel" = "$i" ]; then
+  prompt_required ENV "New env name (dev/prod/staging/qa/...)" ""
+  ENV="${ENV// /_}"
+else
+  ENV="${ENVS[$((env_sel-1))]:-dev}"
+fi
+mkdir -p "${SCRIPT_DIR}/../deploy/${VCENTER}/${ENV}"
+ENV_DIR="${SCRIPT_DIR}/../deploy/${VCENTER}/${ENV}"
+
+# Per-env override dir under secure/<vcenter>/<env>/ — used when the operator
+# wants per-env values (dns/network/base-ip/datastore/...) to differ from the
+# top-level secure/<vcenter>/vcenter.tfvars. Auto-created with a commented
+# template; per-env keys WIN only when actually set.
+mkdir -p "${SCRIPT_DIR}/../secure/${VCENTER}/${ENV}"
+OVERRIDE_TEMPLATE="${SCRIPT_DIR}/../secure/${VCENTER}/${ENV}/vcenter.tfvars"
+if [ ! -f "$OVERRIDE_TEMPLATE" ]; then
+  cat > "$OVERRIDE_TEMPLATE" <<EOF
+# Per-env override — secure/${VCENTER}/${ENV}/vcenter.tfvars
+# Uncomment + set any key to OVERRIDE the top-level secure/${VCENTER}/vcenter.tfvars
+# for this environment only. Keys left commented fall back to the top-level value.
+# (credentials are NEVER per-env — secrets stay in secure/${VCENTER}/credentials.tfvars)
+#
+# datacenter    = "dc_pilot"
+# cluster       = "primary_cluster"
+# resource_pool = "Resources"
+# datastore     = "datastore01"
+# network       = "VM Network"
+# template      = "ubuntu-24-template"
+# domain        = "example.local"
+# gateway       = "198.51.100.1"
+# netmask       = 24
+# dns_servers   = ["203.0.113.53", "203.0.113.54"]
+# ipam_base_ip  = "198.51.100.106"
+EOF
+fi
+
+# Warn early if credentials for this vCenter are missing — otherwise the config
+# is created fine but deploy-vm.sh will fail later ("Encrypted files not found").
+if [ ! -f "${SCRIPT_DIR}/../secure/${VCENTER}/credentials.tfvars" ]; then
+  warn "No secure/${VCENTER}/credentials.tfvars yet — config will be created but DEPLOY WILL FAIL."
+  echo "  Fix: bash scripts/vcenter-setup.sh   (pick/create ${VCENTER}, fill vCenter creds)"
+fi
+echo ""
+
+# Per-vCenter defaults → auto-load from secure/<vcenter>/vcenter.tfvars
+# (plaintext terraform-style file; only present when vcenter-setup.sh ran).
+# Sets per-vCenter: inventory + domain + gateway/netmask/dns + ipam_base_ip.
+# Per-env overrides: secure/<vcenter>/<env>/vcenter.tfvars (if present) WIN.
+load_vcenter_defaults() {
+  local f="$1"
+  [ -f "$f" ] || return 0
+  # scalar string/number keys
+  eval "$(grep -E '^(datacenter|cluster|resource_pool|datastore|network|template|domain|gateway|netmask|ipam_base_ip)\s*=' "$f" | sed -E 's/\s*([a-z_]+)\s*=\s*"([^"]*)"/\1="\2"/; s/\s*([a-z_]+)\s*=\s*([0-9]+)/\1="\2"/')"
+  DEFAULT_DATACENTER="${datacenter:-$DEFAULT_DATACENTER}"
+  DEFAULT_CLUSTER="${cluster:-$DEFAULT_CLUSTER}"
+  DEFAULT_RESOURCE_POOL="${resource_pool:-$DEFAULT_RESOURCE_POOL}"
+  DEFAULT_DATASTORE="${datastore:-$DEFAULT_DATASTORE}"
+  DEFAULT_NETWORK="${network:-$DEFAULT_NETWORK}"
+  DEFAULT_TEMPLATE="${template:-$DEFAULT_TEMPLATE}"
+  DEFAULT_DOMAIN="${domain:-$DEFAULT_DOMAIN}"
+  DEFAULT_GATEWAY="${gateway:-$DEFAULT_GATEWAY}"
+  DEFAULT_NETMASK="${netmask:-$DEFAULT_NETMASK}"
+  DEFAULT_BASE_IP="${ipam_base_ip:-$DEFAULT_BASE_IP}"
+  # dns_servers list → DEFAULT_DNS array (only if this file sets it)
+  if grep -qE '^dns_servers\s*=' "$f"; then
+    DEFAULT_DNS=()
+    while IFS= read -r _d; do
+      [ -n "$_d" ] && DEFAULT_DNS+=("$_d")
+    done < <(grep -E '^dns_servers\s*=' "$f" | sed -E 's/.*\[(.*)\].*/\1/' | tr ',' '\n' | sed -E 's/^[[:space:]]*"//; s/"[[:space:]]*$//')
+  fi
+}
+
+load_vcenter_defaults "${SCRIPT_DIR}/../secure/${VCENTER}/vcenter.tfvars"
+info "vCenter defaults loaded from secure/${VCENTER}/vcenter.tfvars"
+OVERRIDE_FILE="${SCRIPT_DIR}/../secure/${VCENTER}/${ENV}/vcenter.tfvars"
+if [ -f "$OVERRIDE_FILE" ]; then
+  load_vcenter_defaults "$OVERRIDE_FILE"
+  info "Per-env overrides loaded from secure/${VCENTER}/${ENV}/vcenter.tfvars (win over top-level)"
+fi
+echo ""
+
 prompt_required VM_DOMAIN "Domain"                       "$DEFAULT_DOMAIN"
 ok_inline "Domain: ${VM_DOMAIN}"
 prompt_required VM_ANNOT  "Description"                  "${VM_NAME} Server"
 echo ""
 
-# Environment
-info "Environment"
-echo "  1) dev"
-echo "  2) staging"
-echo "  3) prod"
-read -rp "$(echo -e "${CYAN}Select${NC} [1=dev/2=staging/3=prod]: ")" env_sel
-env_sel="${env_sel:-1}"
-case "$env_sel" in 2) ENV=staging;; 3) ENV=prod;; *) ENV=dev;; esac
-ENV_DIR="${SCRIPT_DIR}/../deploy/${ENV}"
-mkdir -p "$ENV_DIR"
-
-# Warn early if credentials for this env are missing — otherwise the config
-# is created fine but deploy-vm.sh will fail later ("Encrypted files not found").
-if [ ! -f "${SCRIPT_DIR}/../secure/${ENV}/credentials.tfvars" ]; then
-  warn "No secure/${ENV}/credentials.tfvars yet — config will be created but DEPLOY WILL FAIL."
-  echo "  Fix: mkdir -p secure/${ENV} && cp secure/dev/credentials.tfvars secure/dev/vcenter.tfvars secure/${ENV}/"
-  echo "       (only if ${ENV} uses the same vCenter as dev)"
-fi
-echo ""
-
 # ===========================================================================
 # 2. vCenter resource selection (govc — fully dynamic)
 # ===========================================================================
-VCRED_FILE="${SCRIPT_DIR}/../secure/${ENV}/credentials.tfvars"
+VCRED_FILE="${SCRIPT_DIR}/../secure/${VCENTER}/credentials.tfvars"
 
 GOVC_READY=false
 if [ -f "$VCRED_FILE" ] && command -v govc &>/dev/null; then
@@ -607,7 +704,7 @@ ENTRY
 }
 
 # ===========================================================================
-# 8. Per-VM config file (deploy/<env>/vm-<name>_<ip>.tfvars)
+# 8. Per-VM config file (deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars)
 # ===========================================================================
 CONFIG_FILE="${ENV_DIR}/vm-${VM_NAME}_${FREE_IP}.tfvars"
 
@@ -620,29 +717,30 @@ NEW_ENTRY=$(generate_vm_entry \
 cat > "$CONFIG_FILE" <<PERVM
 #############################################################
 # VM config — ${VM_NAME} (${FREE_IP})
-# Env: ${ENV}
+# vCenter: ${VCENTER}   Env: ${ENV}
 # Generated: $(date '+%Y-%m-%d %H:%M:%S')
 #
 # HOW TO USE
 # ───────────────────────────────────────────────────────────
 # Deploy this VM only (other VMs untouched):
-#   bash scripts/deploy-vm.sh ${ENV} ${VM_NAME}
+#   bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME}
 #
-# Or manually:
-#   cd terraform
-#   terraform plan   -var-file="deploy/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars" -target='module.vm["${VM_NAME}"]'
-#   terraform apply  -var-file="deploy/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars" -target='module.vm["${VM_NAME}"]'
+# Git note: this file is gitignored (deploy/*/*/vm-*.tfvars).
+# Its values (inventory, SSH key, IPs) are NOT pushed to GitHub.
 #############################################################
 
 # ══════════════════════════════════════════════════════════════
-# ⚡ COMPUTE  (shared vCenter inventory)
+# ⚡ COMPUTE  (vCenter inventory — per-vCenter, shared)
 # ══════════════════════════════════════════════════════════════
 datacenter    = "${GOVC_DC_SEL}"
 cluster       = "${VM_CLUSTER}"
 datastore     = "${VM_DATASTORE}"
 network       = "${NET_PORT_GROUP}"
 template      = "${VM_TEMPLATE}"
-# resource_pool = "Resources"   ← uncomment if needed
+resource_pool = "${DEFAULT_RESOURCE_POOL:-Resources}"
+
+# IPAM fallback scan start (first IP tried when no ip pin). Per-vCenter value.
+ipam_base_ip = "${DEFAULT_BASE_IP}"
 
 # ══════════════════════════════════════════════════════════════
 # 🔑 SSH
@@ -660,11 +758,11 @@ ok "Created ${CONFIG_FILE}"
 
 echo ""
 info "Deploy this VM with:"
-echo "  bash scripts/deploy-vm.sh ${ENV} ${VM_NAME}"
+echo "  bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME}"
 echo "  # or manually:"
 echo "  cd terraform"
-echo "  terraform plan   -var-file=\"../deploy/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars\" -target='module.vm[\"${VM_NAME}\"]'"
-echo "  terraform apply  -var-file=\"../deploy/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars\" -target='module.vm[\"${VM_NAME}\"]'"
+echo "  terraform plan   -state=terraform.${VCENTER}.${ENV}.tfstate -var-file=\"../deploy/${VCENTER}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars\" -target='module.vm[\"${VM_NAME}\"]'"
+echo "  terraform apply  -state=terraform.${VCENTER}.${ENV}.tfstate -var-file=\"../deploy/${VCENTER}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars\" -target='module.vm[\"${VM_NAME}\"]'"
 
 show_os_tree() {
   local os_total="$1"
@@ -739,7 +837,7 @@ fi
 # Auto-decrypt credentials so terraform works immediately
 DECRYPT_SCRIPT="${SCRIPT_DIR}/sops-decrypt.sh"
 if [ -f "$DECRYPT_SCRIPT" ]; then
-  bash "$DECRYPT_SCRIPT" "$ENV" 2>/dev/null && ok "Credentials decrypted → terraform/${ENV} ready" || warn "sops-decrypt failed — run manually later"
+  bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" 2>/dev/null && ok "Credentials decrypted → terraform/${VCENTER}/${ENV} ready" || warn "sops-decrypt failed — run manually later"
 fi
 
 # Done
@@ -747,7 +845,7 @@ echo ""
 ok "Config file → ${CONFIG_FILE}"
 echo ""
 echo -e "  ${BOLD}Deploy:${NC}"
-echo "    bash scripts/deploy-vm.sh ${ENV} ${VM_NAME}"
+echo "    bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME}"
 echo ""
 echo "  Note: deploy-vm.sh uses -target, so ONLY this VM is applied —"
 echo "  other VMs in the same state are never touched."
