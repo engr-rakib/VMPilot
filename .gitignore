@@ -42,8 +42,7 @@ secure/*
 # plaintext staging area for sops-encrypt.sh — never commit
 .tmp-sops-plain/
 
-# Internal docs — kept local (real deployment history / VM inventory), never published
+# Internal docs — kept local (blueprint / operator guides / deployment history), never published
 PROJECT_STATUS.md
-docs/observations/
-docs/production-improvements.md
-docs/new-features-after-improvements.md
+docs/
+deploy/how_to_deploy.md

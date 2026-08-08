@@ -452,9 +452,8 @@ bash scripts/backup.sh /opt/terraform-lab/projects/project01 /backups
 
 ## 📞 Support
 
-- **Documentation:** [`docs/`](docs/)
-- **Operator guide:** [`docs/operator-guide/operator-guide.md`](docs/operator-guide/operator-guide.md)
 - **Requirements & installation:** [`REQUIREMENTS.md`](REQUIREMENTS.md)
+- **Encrypted credentials guide:** [`secure/README.md`](secure/README.md)
 
 ---
 
