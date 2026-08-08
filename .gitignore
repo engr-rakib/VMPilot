@@ -4,8 +4,8 @@
 .terraform/
 .terraform.lock.hcl
 
-# Secure credentials
-secure/
+# Secure credentials (everything under secure/ — except README, see below)
+secure/*
 
 # IPAM state files
 *.ip
