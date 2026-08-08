@@ -16,7 +16,7 @@
   <a href="#feature-overview"><img src="https://img.shields.io/badge/vSphere-7.x%2F8.x-00BFFF" /></a>
   <a href="#feature-overview"><img src="https://img.shields.io/badge/SOPS-%2B%20Age-4B8BBE" /></a>
   <a href="#feature-overview"><img src="https://img.shields.io/badge/Cloud--Init-%E2%9C%85-brightgreen" /></a>
-  <a href="https://github.com/engr-rakib/terraform-lab"><img src="https://img.shields.io/github/stars/engr-rakib/terraform-lab?style=social" /></a>
+  <a href="https://github.com/engr-rakib/VMPilot"><img src="https://img.shields.io/github/stars/engr-rakib/VMPilot?style=social" /></a>
 </p>
 
 ---
