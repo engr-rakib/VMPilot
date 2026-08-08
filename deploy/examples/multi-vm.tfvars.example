@@ -21,7 +21,7 @@ ssh_public_key = "ssh-ed25519 AAAAC3..."
 # ─── VM Configs (for_each) ───────────────────────────────────
 vm_configs = {
   prod_app = {
-    hostname    = "accesspilot-prod"
+    hostname    = "vmpilot-prod"
     ip_address  = "198.51.100.110"
     gateway     = "192.0.2.1"
     cpu         = 4
@@ -31,8 +31,8 @@ vm_configs = {
     ipam_enabled         = false
     netmask              = 24
     dns_servers          = ["198.51.100.10", "8.8.8.8"]
-    folder               = "/accesspilot/vm/prod"
-    annotation           = "Production AccessPilot VM"
+    folder               = "/vmpilot/vm/prod"
+    annotation           = "Production VMPilot VM"
     disable_auto_updates = true
     enable_node_exporter = true
 
@@ -43,8 +43,8 @@ vm_configs = {
     ]
   }
 
-  accesspilot_test = {
-    hostname    = "accesspilot-test"
+  vmpilot_test = {
+    hostname    = "vmpilot-test"
     ip_address  = "198.51.100.111"
     gateway     = "192.0.2.1"
     cpu         = 2
@@ -54,8 +54,8 @@ vm_configs = {
     ipam_enabled = false
     netmask      = 24
     dns_servers  = ["198.51.100.10", "8.8.8.8"]
-    folder       = "/accesspilot/vm/test"
-    annotation   = "Test AccessPilot VM"
+    folder       = "/vmpilot/vm/test"
+    annotation   = "Test VMPilot VM"
 
     os_partitions = [
       { mount_point = "/",    size = "8G" },

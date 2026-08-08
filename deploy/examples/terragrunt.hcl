@@ -14,7 +14,7 @@
 # Architecture:
 #   deploy/
 #   ├── terragrunt.hcl          ← root config (providers, backend)
-#   ├── vm-accesspilot/
+#   ├── vm-vmpilot/
 #   │   └── terragrunt.hcl      ← VM-specific inputs
 #   └── vm-webapp/
 #       └── terragrunt.hcl      ← another VM, parallel apply
@@ -38,7 +38,7 @@
 # remote_state {
 #   backend = "s3"
 #   config = {
-#     bucket         = "terraform-state-accesspilot"
+#     bucket         = "terraform-state-vmpilot"
 #     key            = "${path_relative_to_include()}/terraform.tfstate"
 #     region         = "us-east-1"
 #     encrypt        = true
@@ -47,7 +47,7 @@
 # }
 
 # ─────────────────────────────────────────────────────────────────────────
-# deploy/vm-accesspilot/terragrunt.hcl
+# deploy/vm-vmpilot/terragrunt.hcl
 # ─────────────────────────────────────────────────────────────────────────
 # terraform {
 #   source = "../../terraform//modules/vm"
@@ -59,14 +59,14 @@
 #
 # inputs = {
 #   vm_name    = "prod_app"
-#   hostname   = "accesspilot-prod"
+#   hostname   = "vmpilot-prod"
 #   domain     = "example.local"
 #   cpu        = 4
 #   memory     = 8192
 #   disk_size  = 80
 #
-#   folder     = "/accesspilot/vm/prod"
-#   annotation = "Production AccessPilot VM"
+#   folder     = "/vmpilot/vm/prod"
+#   annotation = "Production VMPilot VM"
 #
 #   ip_address = "198.51.100.110"
 #   netmask    = 24
