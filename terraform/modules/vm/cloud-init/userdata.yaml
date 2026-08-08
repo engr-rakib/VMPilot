@@ -14,7 +14,9 @@ users:
     lock_passwd: true
 %{ for u in extra_users ~}
   - name: ${u.username}
+%{ if u.password != "" ~}
     passwd: ${u.password}
+%{ endif ~}
     sudo: ALL=(ALL) NOPASSWD:ALL
     groups: [sudo, adm]
     lock_passwd: false

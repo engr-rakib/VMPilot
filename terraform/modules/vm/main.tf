@@ -130,7 +130,7 @@ resource "vsphere_virtual_machine" "this" {
     # Hardcoded true: Terraform doesn't allow variables in lifecycle blocks.
     # Use scripts/destroy.sh for safe destroy flow.
     prevent_destroy = true
-    ignore_changes = [datastore_id]
+    ignore_changes  = [datastore_id]
   }
 
 }

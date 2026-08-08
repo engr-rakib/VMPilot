@@ -120,7 +120,7 @@ create_override_template() {
 # network       = "${NET:-VM Network}"
 # template      = "${TPL:-ubuntu-24-template}"
 # domain        = "${DOMAIN:-example.local}"
-# gateway       = "${GW:-198.51.100.1}"
+# gateway       = "${GW:-192.0.2.1}"
 # netmask       = ${NM:-24}
 # dns_servers   = [$(printf '"%s", ' "${DNS[@]}" | sed 's/, $//')]
 # ipam_base_ip  = "${BASEIP:-198.51.100.106}"
