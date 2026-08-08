@@ -49,3 +49,6 @@ deploy/how_to_deploy.md
 
 # sops age key copy — synced to private repo only (see scripts sync)
 sops-age/
+
+# git helper files (sync script etc.) — internal, backed up to private snapshot only
+github/
