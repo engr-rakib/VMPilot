@@ -31,13 +31,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run tflint
-        uses: terraform-linters/tflint-action@v1
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.0'
 
-      - name: Run tfsec
-        uses: aquasecurity/tfsec-action@v1
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: latest
 
-      - name: Run checkov
+      - name: Init TFLint
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Run TFLint
+        run: tflint -f compact
+
+      - name: Run Trivy (IaC misconfiguration)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: 'fs'
+          scan-ref: './terraform'
+          scanners: 'misconfig'
+          format: 'table'
+
+      - name: Run Checkov
         uses: bridgecrewio/checkov-action@v12
         with:
           directory: terraform/
