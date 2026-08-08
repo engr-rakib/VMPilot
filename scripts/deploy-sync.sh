@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ===========================================================================
 # Script   : deploy-sync.sh
-# Path     : /opt/terraform-lab/projects/project01/scripts/deploy-sync.sh
+# Path     : scripts/deploy-sync.sh   (relative to project root)
 # ---------------------------------------------------------------------------
 # Purpose  : Auto-deploy loop that satisfies REQUIREMENTS.md.
 #

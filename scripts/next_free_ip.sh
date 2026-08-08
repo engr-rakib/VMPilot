@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ===========================================================================
 # Script   : next_free_ip.sh
-# Path     : /opt/terraform-lab/projects/project01/scripts/next_free_ip.sh
+# Path     : scripts/next_free_ip.sh   (relative to project root)
 # ---------------------------------------------------------------------------
 # Purpose  : IPAM helper — pings sequential IPs from a base address upward
 #            until it finds one that does NOT respond.  Called by Terraform

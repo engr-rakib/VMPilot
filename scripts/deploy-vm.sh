@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ===========================================================================
 # Script   : deploy-vm.sh
-# Path     : /opt/terraform-lab/projects/project01/scripts/deploy-vm.sh
+# Path     : scripts/deploy-vm.sh   (relative to project root)
 # ---------------------------------------------------------------------------
 # Purpose  : Deploy / redeploy ONE VM, leaving all other VMs in the same
 #            state completely untouched.

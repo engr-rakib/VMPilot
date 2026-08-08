@@ -422,7 +422,7 @@ terraform -chdir=terraform output vms
 terraform -chdir=terraform output cloud_init_status
 
 # 6. Backup:
-bash scripts/backup.sh /opt/terraform-lab/projects/project01 /backups
+bash scripts/backup.sh <project-root> /backups
 ```
 
 ---
