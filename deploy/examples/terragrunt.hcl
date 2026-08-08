@@ -70,7 +70,7 @@
 #
 #   ip_address = "198.51.100.110"
 #   netmask    = 24
-#   gateway    = "198.51.100.1"
+#   gateway    = "192.0.2.1"
 #   dns_servers = ["198.51.100.10", "8.8.8.8"]
 #
 #   os_partitions = [

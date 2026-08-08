@@ -155,7 +155,7 @@ if [ ! -f "$OVERRIDE_TEMPLATE" ]; then
 # network       = "VM Network"
 # template      = "ubuntu-24-template"
 # domain        = "example.local"
-# gateway       = "198.51.100.1"
+# gateway       = "192.0.2.1"
 # netmask       = 24
 # dns_servers   = ["203.0.113.53", "203.0.113.54"]
 # ipam_base_ip  = "198.51.100.106"
@@ -623,7 +623,11 @@ echo ""
 EXTRA_USERS=()
 info "Additional OS users (create VM owner accounts)"
 echo "  Enter usernames one by one. Leave empty to finish."
-echo "  Default password: ${DEFAULT_EXTRA_USER_PASSWORD} (user must change on first login)"
+if [ -n "${DEFAULT_EXTRA_USER_PASSWORD}" ]; then
+  echo "  Default password: ${DEFAULT_EXTRA_USER_PASSWORD} (user must change on first login)"
+else
+  echo "  No default password set — accounts are SSH-key only (recommended)"
+fi
 while true; do
   read -rp "  Username [empty=done]: " extra_user
   [ -z "$extra_user" ] && break
@@ -632,7 +636,11 @@ while true; do
     continue
   fi
   EXTRA_USERS+=("$extra_user")
-  ok "Added ${extra_user} (password: ${DEFAULT_EXTRA_USER_PASSWORD} — change on first login)"
+  if [ -n "${DEFAULT_EXTRA_USER_PASSWORD}" ]; then
+    ok "Added ${extra_user} (password: ${DEFAULT_EXTRA_USER_PASSWORD} — change on first login)"
+  else
+    ok "Added ${extra_user} (SSH-key only, no password)"
+  fi
 done
 [ ${#EXTRA_USERS[@]} -gt 0 ] && ok "${#EXTRA_USERS[@]} additional user(s) configured" || info "No additional users"
 
