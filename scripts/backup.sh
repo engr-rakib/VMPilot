@@ -114,6 +114,11 @@ do_restore() {
   read -rp "  Continue? (y/N): " yn; [[ ! "$yn" =~ ^[Yy] ]] && { info "Cancel."; return; }
   [ -f "${PROJECT_DIR}/terraform/terraform.tfstate" ] && \
     cp "${PROJECT_DIR}/terraform/terraform.tfstate" "${BACKUP_DIR}/pre-restore-${PROJECT_NAME}-$(date +%Y%m%d-%H%M%S).tfstate"
+  for sf in "${PROJECT_DIR}"/terraform/terraform.*.tfstate; do
+    [ -f "$sf" ] || continue
+    bn="$(basename "$sf")"
+    cp "$sf" "${BACKUP_DIR}/pre-restore-${PROJECT_NAME}-$(date +%Y%m%d-%H%M%S).${bn}"
+  done
   tar -xzf "$file" -C "$(dirname "$PROJECT_DIR")"
   ok "Restored: $(basename "$file")"
 }

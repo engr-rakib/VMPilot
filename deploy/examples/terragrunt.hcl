@@ -1,7 +1,7 @@
 # Terragrunt Example — Multi-VM Setup (ALTERNATIVE to built-in for_each)
 #
 # NOTE: The root module already supports unlimited VMs via for_each in
-#       deploy/<env>/deploy.tfvars. Terragrunt is OPTIONAL — use only if
+#       deploy/<vcenter>/<env>/vm-*.tfvars. Terragrunt is OPTIONAL — use only if
 #       you want per-VM isolated state or parallel apply.
 #
 # Usage:
@@ -80,7 +80,7 @@
 #   ]
 #
 #   extra_users = [
-#     { username = "devops", password = "$(sops -d ../../secure/prod/passwords.tfvars | grep devops | cut -d= -f2)" }
+#     { username = "devops", password = "$(sops -d ../../secure/<vcenter>/passwords.tfvars | grep devops | cut -d= -f2)" }
 #   ]
 #
 #   disable_auto_updates = true

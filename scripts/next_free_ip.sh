@@ -52,19 +52,25 @@ BASE_IP=$(jq -r '.base_ip' <<< "$INPUT")
 SKIP_IP=$(jq -r '.skip_ip // ""' <<< "$INPUT")
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-20}
 
-# ── Reserved IPs = the ip_address values declared in the per-VM config files ──
-# These are the source of truth (config file = desired/assigned IP). Reading
-# them here means we no longer need <persist> .<vm>_ip tracking. A powered-off
-# VM is still "reserved" because its IP is in its config file, so ping alone
-# can never hand a used IP to a new VM.
+# ── Reserved IPs = the ip_address values declared in the per-VM config
+# files (deploy/<vcenter>/<env>/vm-*.tfvars, plus legacy deploy/<env>/vm-*.tfvars).
+# These are the source of truth (config file = desired/assigned IP). Reading them
+# here means we no longer need <persist> .<vm>_ip tracking. A powered-off VM is
+# still "reserved" because its IP is in its config file, so ping alone can never
+# hand a used IP to a new VM.
 RESERVED_FILE_IPS=""
-CONFIG_GLOB="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}/deploy/*/vm-*.tfvars"
+ROOT="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
+CONFIG_GLOBS=( "${ROOT}/deploy/*/vm-*.tfvars" "${ROOT}/deploy/*/*/vm-*.tfvars" )
 shopt -s nullglob
-for f in $CONFIG_GLOB; do
-  [ -f "$f" ] || continue
-  ip=$(grep -oE 'ip_address[[:space:]]*=[[:space:]]*"[0-9.]+"' "$f" | grep -oE '[0-9.]+' | head -n1 || true)
-  [ -n "$ip" ] && RESERVED_FILE_IPS+="$ip
+for CONFIG_GLOB in "${CONFIG_GLOBS[@]}"; do
+  for f in $CONFIG_GLOB; do
+    [ -f "$f" ] || continue
+    # every ip_address inside vm_configs (2-space-indented entry keys)
+    for ip in $(grep -oE 'ip_address[[:space:]]*=[[:space:]]*"[0-9.]+"' "$f" | grep -oE '[0-9.]+'); do
+      [ -n "$ip" ] && RESERVED_FILE_IPS+="$ip
 "
+    done
+  done
 done
 shopt -u nullglob
 RESERVED_FILE_IPS="$(printf '%s' "$RESERVED_FILE_IPS" | sort -u)"

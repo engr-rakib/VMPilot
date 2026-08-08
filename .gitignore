@@ -10,6 +10,13 @@ secure/
 # IPAM state files
 *.ip
 
+# Per-VM deploy configs — contain real inventory/SSH key/IPs.
+# Kept local (never pushed to GitHub); one file per VM.
+# Layout: deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars (new)
+# Legacy flat layout kept parallel: deploy/<env>/vm-<name>_<ip>.tfvars
+deploy/*/*/vm-*.tfvars
+deploy/*/vm-*.tfvars
+
 # Crash logs
 crash.log
 crash.*.log

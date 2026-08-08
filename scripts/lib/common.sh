@@ -12,6 +12,7 @@ ok_inline(){ echo -e "\033[1A\033[2K${GREEN}✓${NC} $*"; }
 warn()     { echo -e "${YELLOW}⚠${NC} $*"; }
 err()      { echo -e "${RED}✗${NC} $*" >&2; }
 die()      { err "$1"; exit 1; }
+error()    { err "$@"; }   # alias for err() — used by deploy scripts
 
 # ─── Prompt helpers ──────────────────────────────────────────────────────
 prompt_required() {

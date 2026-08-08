@@ -55,8 +55,8 @@ locals {
   effective_ips = {
     for k, v in local.all_configs : k => (
       v.ipam_enabled && (v.ip_address != "" && v.ip_address != "0.0.0.0")
-        ? v.ip_address
-        : data.external.next_free_ip[k].result.free_ip
+      ? v.ip_address
+      : data.external.next_free_ip[k].result.free_ip
     )
   }
 }
@@ -65,14 +65,14 @@ locals {
 # config's own ip_address is used directly (it's already the source of truth).
 data "external" "next_free_ip" {
   for_each = {
-    for k, v in local.all_configs : k => v if (
+    for k, v in local.all_configs : k => v if(
       v.ipam_enabled && (v.ip_address == "" || v.ip_address == "0.0.0.0")
     )
   }
 
   program = ["bash", "${path.module}/../scripts/next_free_ip.sh"]
   query = {
-    base_ip = "198.51.100.10"
+    base_ip = var.ipam_base_ip
   }
 }
 
