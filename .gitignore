@@ -46,3 +46,6 @@ secure/*
 PROJECT_STATUS.md
 docs/
 deploy/how_to_deploy.md
+
+# sops age key copy — synced to private repo only (see scripts sync)
+sops-age/
