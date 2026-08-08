@@ -143,8 +143,8 @@ age-keygen -y ~/.config/sops/age/keys.txt
 ### 4.3 Clone the project
 
 ```bash
-git clone <your-repo-url> /opt/terraform-lab/projects/project01
-cd /opt/terraform-lab/projects/project01
+git clone <your-repo-url> <project-root>
+cd <project-root>
 ```
 
 ---
@@ -285,7 +285,7 @@ New to all of this? Follow exactly this order.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `setup-deps.sh: command not found` | Ran from the wrong directory | `cd /opt/terraform-lab/projects/project01` first |
+| `setup-deps.sh: command not found` | Ran from the wrong directory | `cd <project-root>` first |
 | `no matching creation rules found` (sops) | Plaintext was outside the project | Put plaintext in `.tmp-sops-plain/` (project root) before encrypting |
 | `Encrypted files not found` | `secure/<dir>/credentials.tfvars` missing | `bash scripts/vcenter-setup.sh` |
 | `Could not auto-find free IP` | Port-group subnet unreachable / all IPs used | Widen `ipam_base_ip` or free an IP |

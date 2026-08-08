@@ -3,7 +3,7 @@ set -euo pipefail
 
 # ===========================================================================
 # Script   : create-vm-config.sh
-# Path     : /opt/terraform-lab/projects/project01/scripts/create-vm-config.sh
+# Path     : scripts/create-vm-config.sh   (relative to project root)
 # ---------------------------------------------------------------------------
 # Purpose  : Quickly scaffold a ready-to-use VM config.
 #            Asks only essentials (name, env), auto-assigns a free IP, then
