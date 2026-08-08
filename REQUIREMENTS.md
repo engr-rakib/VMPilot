@@ -1,4 +1,4 @@
-# AccessPilot — VM Auto-Deploy: Requirements, Installation & Beginner Guide
+# VMPilot — VM Auto-Deploy: Requirements, Installation & Beginner Guide
 
 > **One command → a complete Ubuntu VM on vSphere in ~3 minutes.**
 > This file is the single starting point for **anyone** — a total beginner or an

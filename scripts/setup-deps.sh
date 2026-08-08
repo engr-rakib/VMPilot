@@ -104,7 +104,7 @@ fi
 clear 2>/dev/null || true
 cat <<LOGO
 ══════════════════════════════════════════════════════════
-    AccessPilot — Dependency Installer
+    VMPilot — Dependency Installer
     OS pkg manager : $PM
     Target tools    : jq git curl wget unzip age openssl
                       + terraform (>=$TERRAFORM_MIN) + govc + sops

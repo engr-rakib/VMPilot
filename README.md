@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/🚀%20AccessPilot-vSphere%20Automation-7B42BC?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/🚀%20VMPilot-vSphere%20Automation-7B42BC?style=for-the-badge" />
 </p>
 
-<h1 align="center">🚀 AccessPilot</h1>
+<h1 align="center">🚀 VMPilot</h1>
 
 <h3 align="center">VM Deployment &amp; Lifecycle Automation on VMware vSphere</h3>
 
@@ -27,12 +27,12 @@
 
 ---
 
-## 📌 Why AccessPilot?
+## 📌 Why VMPilot?
 
 Most VM workflows are **manual, error-prone, and slow** — log into vCenter, clone a
 template, configure networking, partition disks, remember which IPs are taken…
 
-**AccessPilot removes all of that.** You tell it *what* you want (a VM named `web-01`
+**VMPilot removes all of that.** You tell it *what* you want (a VM named `web-01`
 in `prod`), and it handles *everything else* — picking the right cluster, datastore,
 template, and network, finding a free IP, provisioning OS + LVM + swap, injecting SSH
 keys, and even keeping your config file in sync with reality.
@@ -459,6 +459,6 @@ bash scripts/backup.sh /opt/terraform-lab/projects/project01 /backups
 ---
 
 <p align="center">
-  <b>AccessPilot</b> — *"Our infrastructure should run itself — free from manual error."*<br/>
+  <b>VMPilot</b> — *"Our infrastructure should run itself — free from manual error."*<br/>
   <sub>Made with ❤️ using Terraform · vSphere · SOPS</sub>
 </p>
