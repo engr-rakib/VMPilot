@@ -73,6 +73,5 @@ jobs:
   #     - uses: actions/checkout@v4
   #     - name: Deploy
   #       run: |
-  #         cd /opt/terraform-lab
-  #         git pull
+  #         cd $GITHUB_WORKSPACE
   #         bash scripts/sops-decrypt.sh dev --apply
