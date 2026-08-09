@@ -7,10 +7,12 @@ set -euo pipefail
 # ║                                                                      ║
 # ║  bash backup.sh                        → interactive (asks paths)   ║
 # ║  bash backup.sh /project /backup       → direct (no prompts)        ║
+# ║  bash backup.sh paths                  → clear & re-ask paths       ║
 # ║                                                                      ║
-# ║  First run saves paths to ~/.backup-config; later runs reuse them.  ║
+# ║  First run asks for the project + backup paths and saves them to    ║
+# ║  ~/.backup-config; later runs reuse them (no hardcoded paths).      ║
 # ║                                                                      ║
-# ║  Menu: 1=Backup  2=List  3=Restore  4=Exit                         ║
+# ║  Menu: 1=Backup 2=List 3=Restore 4=Change paths 5=Exit             ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 
 BOLD='\033[1m'; RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -53,22 +55,43 @@ detect_project_root() {
 }
 
 # ─── Resolve paths ─────────────────────────────────────────────────────
+# No hardcoded paths: first run prompts, then remembers. CLI args or the
+# "Change paths" menu option update the saved values any time.
 [ $# -ge 2 ] && { PROJECT_DIR="$1"; BACKUP_DIR="$2"; shift 2; }
 
-resolve_paths() {
-  load_config && info "Loaded config: ${CONFIG}" && return
-  while [ -z "$PROJECT_DIR" ]; do
+prompt_project_dir() {
+  local detected="$(detect_project_root)"
+  local p=""
+  if [ -n "$detected" ]; then
+    read -rp "$(echo -e "${CYAN}Project directory${NC} [${detected}]: ")" p
+    p="${p:-$detected}"
+  else
     read -rp "$(echo -e "${CYAN}Project directory${NC}: ")" p
-    [ -n "$p" ] && PROJECT_DIR="$(realpath "$p" 2>/dev/null || echo "$p")"
-  done
-  while [ -z "$BACKUP_DIR" ]; do
+  fi
+  realpath "$p" 2>/dev/null || echo "$p"
+}
+
+resolve_paths() {
+  # Both known (from CLI args or current values) → remember and return.
+  if [ -n "$PROJECT_DIR" ] && [ -n "$BACKUP_DIR" ]; then
+    save_config
+    return
+  fi
+  # Nothing provided → use the saved config if it exists.
+  if [ -z "$PROJECT_DIR" ] && [ -z "$BACKUP_DIR" ] && load_config; then
+    info "Loaded config: ${CONFIG}"
+    return
+  fi
+  # Still missing → ask.
+  [ -z "$PROJECT_DIR" ] && PROJECT_DIR="$(prompt_project_dir)"
+  if [ -z "$BACKUP_DIR" ]; then
     read -rp "$(echo -e "${CYAN}Backup directory${NC}: ")" b
-    [ -n "$b" ] && BACKUP_DIR="$b"
-  done
+    BACKUP_DIR="$b"
+  fi
   save_config
 }
 
-[ -z "$PROJECT_DIR" ] || [ -z "$BACKUP_DIR" ] && resolve_paths
+resolve_paths
 
 # Self-heal: saved PROJECT_DIR no longer exists (dir renamed/moved) →
 # fall back to the detected repo root and update the saved config.
@@ -151,6 +174,17 @@ do_restore() {
   ok "Restored: $(basename "$file")"
 }
 
+# ─── Change paths ───────────────────────────────────────────────────────
+# Clear saved paths and ask for new ones (or auto-detect) at any time.
+change_paths() {
+  warn "Clearing saved paths..."
+  PROJECT_DIR=""
+  BACKUP_DIR=""
+  rm -f "$CONFIG"
+  resolve_paths
+  ok "Paths updated — project: ${PROJECT_DIR}, backup: ${BACKUP_DIR}/"
+}
+
 # ─── Interactive menu ───────────────────────────────────────────────────
 interactive() {
   while true; do
@@ -162,14 +196,16 @@ interactive() {
     echo "║  1) Create backup                                ║"
     echo "║  2) List backups                                 ║"
     echo "║  3) Restore from backup                          ║"
-    echo "║  4) Exit                                         ║"
+    echo "║  4) Change paths                                 ║"
+    echo "║  5) Exit                                         ║"
     echo "╚═══════════════════════════════════════════════════╝"
-    read -rp "Select [1-4]: " c; c="${c:-4}"
+    read -rp "Select [1-5]: " c; c="${c:-5}"
     case "$c" in
       1) do_backup ;;
       2) list_backups ;;
       3) do_restore ;;
-      4|q) info "Bye!"; exit 0 ;;
+      4) change_paths ;;
+      5|q) info "Bye!"; exit 0 ;;
     esac
   done
 }
@@ -179,5 +215,6 @@ case "${1:-menu}" in
   backup|b|-b)   do_backup ;;
   list|l|-l)     list_backups ;;
   restore|r|-r)  do_restore "${2:-}" ;;
+  paths|set-path|change-path) change_paths ;;
   menu|m|*)      interactive ;;
 esac

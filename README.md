@@ -307,8 +307,13 @@ Menu:
   1) Create backup
   2) List backups (ID, Date, Size, Filename)
   3) Restore from backup
-  4) Exit
+  4) Change paths (clear & re-ask — e.g. after a rename)
+  5) Exit
 ```
+
+> No hardcoded paths — first run asks for project + backup dirs and remembers
+> them in `~/.backup-config`. Change them any time with menu option 4 or
+> `bash scripts/backup.sh paths`.
 
 ---
 
