@@ -455,6 +455,9 @@ datastore = "datastore99"   # ← prod only; everything else inherits the top-le
   `domain`, `gateway`, `netmask`, `dns_servers`, `ipam_base_ip`
 - **Credentials are never per-env** — secrets live only in `secure/<dir>/credentials.tfvars`
 
+> 📖 **Deep dive:** [docs/multi-vcenter.md](docs/multi-vcenter.md) — full multi-vCenter
+> architecture, onboarding wizard, override model, and deploy flow.
+
 ---
 
 ### 12. Customization Options
