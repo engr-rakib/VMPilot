@@ -38,6 +38,20 @@ load_config() {
   return 1
 }
 
+# ─── Auto-detect project root ────────────────────────────────────────────
+# Used when the saved PROJECT_DIR is stale (e.g. the directory was renamed or
+# moved). Detects the repo root from the current directory — but only accepts
+# it if it really looks like this project.
+detect_project_root() {
+  local git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [ -n "$git_root" ] && [ -f "$git_root/scripts/backup.sh" ] && [ -d "$git_root/terraform" ]; then
+    echo "$git_root"
+    return 0
+  fi
+  echo ""
+  return 1
+}
+
 # ─── Resolve paths ─────────────────────────────────────────────────────
 [ $# -ge 2 ] && { PROJECT_DIR="$1"; BACKUP_DIR="$2"; shift 2; }
 
@@ -55,7 +69,21 @@ resolve_paths() {
 }
 
 [ -z "$PROJECT_DIR" ] || [ -z "$BACKUP_DIR" ] && resolve_paths
-[ ! -d "$PROJECT_DIR" ] && { err "Project not found: $PROJECT_DIR"; exit 1; }
+
+# Self-heal: saved PROJECT_DIR no longer exists (dir renamed/moved) →
+# fall back to the detected repo root and update the saved config.
+if [ ! -d "$PROJECT_DIR" ]; then
+  ROOT_DETECTED="$(detect_project_root)"
+  if [ -n "$ROOT_DETECTED" ]; then
+    warn "Project not found: ${PROJECT_DIR}"
+    info "Auto-detected project root: ${ROOT_DETECTED} — updating config"
+    PROJECT_DIR="$ROOT_DETECTED"
+    save_config
+  else
+    err "Project not found: ${PROJECT_DIR}"
+    exit 1
+  fi
+fi
 mkdir -p "$BACKUP_DIR"
 
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
