@@ -267,7 +267,10 @@ echo "  ─── IPAM (new-VM free-IP scan start) ───"
 ask "  Base IP for free-IP scan" BASEIP "$D_BASEIP"
 [ -n "$BASEIP" ] || { error "Base IP is required (per-vCenter)"; exit 1; }
 
-# ─── 3b. finalize dir name (<datacenter>_<server>) + auto-create dirs ──
+# ─── 3b. finalize dir name (<datacenter>_<server>) ──────────
+# NOTE: directories are NOT created here — only AFTER the user confirms
+# (see 4b below). Otherwise an aborted run would leave orphan dirs + override
+# templates with no parent credentials.tfvars/vcenter.tfvars behind.
 if [ "$IS_NEW" = "1" ]; then
   # dir name = <datacenter>_<server> so the datacenter identity is visible
   DC_SAN="$(echo "$DC" | sed -E 's/[^a-zA-Z0-9._-]/_/g')"
@@ -280,21 +283,6 @@ if [ "$IS_NEW" = "1" ]; then
     SRC=".tmp-sops-plain/${VCENTER}"
     mkdir -p "$SRC"
   fi
-  # auto-create env child dirs + per-env override dirs
-  mkdir -p "deploy/${VCENTER}"/{dev,prod,staging} "secure/${VCENTER}"
-  for _e in dev prod staging; do
-    mkdir -p "secure/${VCENTER}/${_e}"
-    create_override_template "$VCENTER" "$_e"
-  done
-  ok "Created deploy/${VCENTER}/{dev,prod,staging} and secure/${VCENTER}/{dev,prod,staging} (override dirs)"
-else
-  # existing vCenter — ensure per-env override dirs exist for its envs
-  for _d in "deploy/${VCENTER}"/*/; do
-    [ -d "$_d" ] || continue
-    _e="$(basename "$_d")"
-    mkdir -p "secure/${VCENTER}/${_e}"
-    create_override_template "$VCENTER" "$_e"
-  done
 fi
 
 # ─── 4. summary + confirm ──────────────────────────────────
@@ -316,11 +304,30 @@ echo "    netmask       = $NM"
 echo "    dns_servers   = [${DNS[*]}]"
 echo "    base_ip       = $BASEIP"
 echo "  ──────────────────────────────────────────────"
-read -rp "  Save? [y/N]: " CONFIRM
+read -rp "  Save? (y=confirm / Enter or n=abort) [N]: " CONFIRM
 case "$CONFIRM" in
   y|Y|yes|YES) ;;
   *) echo "  Aborted. Nothing saved."; rm -rf "$SRC"; exit 1;;
 esac
+
+# ─── 4b. auto-create dirs ONLY after confirmation ─────────
+# (an aborted run must leave no orphan dirs / override templates behind)
+if [ "$IS_NEW" = "1" ]; then
+  mkdir -p "deploy/${VCENTER}"/{dev,prod,staging} "secure/${VCENTER}"
+  for _e in dev prod staging; do
+    mkdir -p "secure/${VCENTER}/${_e}"
+    create_override_template "$VCENTER" "$_e"
+  done
+  ok "Created deploy/${VCENTER}/{dev,prod,staging} and secure/${VCENTER}/{dev,prod,staging} (override dirs)"
+else
+  # existing vCenter — ensure per-env override dirs exist for its envs
+  for _d in "deploy/${VCENTER}"/*/; do
+    [ -d "$_d" ] || continue
+    _e="$(basename "$_d")"
+    mkdir -p "secure/${VCENTER}/${_e}"
+    create_override_template "$VCENTER" "$_e"
+  done
+fi
 
 # ─── 5-6. write plaintext + encrypt ───────────────────────
 DEST="secure/${VCENTER}"
