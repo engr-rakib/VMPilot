@@ -216,7 +216,7 @@ Your config files are **self-healing**:
 - **Key auto-normalization (R4)** — copied a config and forgot to rename it? The key,
   annotation, and hostname are fixed automatically.
 - **IP auto-sync (R3)** — after every apply, the config file's `ip_address` is updated
-  and the file is **renamed** (`vm-web-01_10.0.0.5.tfvars` → `vm-web-01_10.0.0.6.tfvars`)
+  and the file is **renamed** (`vm-web-01_198.51.100.107.tfvars` → `vm-web-01_198.51.100.108.tfvars`)
   so the file on disk always matches reality.
 
 ---
@@ -445,7 +445,7 @@ bash scripts/backup.sh <project-root> /backups
 
 - [ ] Standalone `pre-apply-check.sh` with an 8-point pre-flight checklist
 - [ ] `destroy.sh` wrapper with state backup + explicit confirmation
-- [ ] Optional S3 remote-state backend (`backends/s3/bootstrap.sh`)
+- [x] Optional S3 remote-state backend (`backends/s3/bootstrap.sh`)
 - [ ] Multi-cluster / multi-datacenter placement logic
 
 ---
