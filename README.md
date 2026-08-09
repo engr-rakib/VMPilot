@@ -46,6 +46,8 @@ keys, and even keeping your config file in sync with reality.
 
 - [Feature Overview](#-feature-overview)
 - [How It Works](#-how-it-works)
+- [Technology & Architecture](#-technology--architecture)
+- [Internal Workflow](#-internal-workflow)
 - [Feature Deep-Dives](#-feature-deep-dives)
   - [1. One-Command VM Deployment](#1-one-command-vm-deployment)
   - [2. Auto-Deploy Loop — drop & forget](#2-auto-deploy-loop--drop--forget)
@@ -59,6 +61,7 @@ keys, and even keeping your config file in sync with reality.
   - [10. Multi-VM & Scaling](#10-multi-vm--scaling)
   - [11. Multi-vCenter Support](#11-multi-vcenter-support)
   - [12. Customization Options](#12-customization-options)
+- [From Zero to a Production-Grade VM](#-from-zero-to-a-production-grade-vm)
 - [Quick Start](#-quick-start)
 - [Tech Stack](#-tech-stack)
 - [Roadmap](#-roadmap)
@@ -126,6 +129,72 @@ keys, and even keeping your config file in sync with reality.
 │   6. ✅ Ready in ~2–3 minutes                                    │
 └───────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## 🧩 Technology & Architecture
+
+Five layers, one config file. You only ever touch **L1** — everything below is automated.
+
+```
+┌────────────────────────────────────────────────────────────────────┐
+│ L1  OPERATOR - the CLI you use                                     │
+│ setup-deps.sh · vcenter-setup.sh · create-vm-config.sh             │
+│ deploy-vm.sh · deploy-sync.sh · backup.sh                          │
+│ sops-encrypt.sh · sops-decrypt.sh · next_free_ip.sh                │
+├────────────────────────────────────────────────────────────────────┤
+│ L2  CONFIG - source of truth                                       │
+│ deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars   per-VM config       │
+│ secure/<vcenter>/vcenter.tfvars               plaintext inventory  │
+│ secure/<vcenter>/credentials.tfvars           SOPS + Age (secret)  │
+├────────────────────────────────────────────────────────────────────┤
+│ L3  ORCHESTRATION - Terraform >= 1.6                               │
+│ main.tf for_each · module.vm · IPAM (external data source)         │
+│ check{ duplicate IP } · per-vCenter+env state files                │
+├────────────────────────────────────────────────────────────────────┤
+│ L4  VSPHERE - vmware/vsphere provider + govc                       │
+│ clone template · datastore/LVM · network · guestinfo injection     │
+├────────────────────────────────────────────────────────────────────┤
+│ L5  GUEST - cloud-init inside the VM                               │
+│ network · partition/LVM · data disks · users · SSH · exporter      │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+**L1 → L2:** interactive scripts write real, reviewable config files — the same
+files you can hand-edit. **L2 → L3:** Terraform merges one environment's configs
+into a single `vm_configs` map (never across vCenters). **L3 → L4:** the vSphere
+provider clones, provisions, and injects cloud-init via guestinfo.
+**L4 → L5:** cloud-init turns a blank clone into a configured server.
+
+---
+
+## ⚙️ Internal Workflow
+
+What actually happens inside when you deploy **one** VM:
+
+```
+bash scripts/deploy-vm.sh <vcenter> <env> <vm-name>
+│
+├─ 1  Resolve paths + the per-vCenter+env state file (isolated state)
+├─ 2  Auto-normalize the vm_configs key → VM name           (R4)
+├─ 3  Blending guard — validate every per-VM config file    (fails fast)
+├─ 4  Merge this env's configs → a single -var-file
+├─ 5  sops-decrypt credentials → *.auto.tfvars              (transient)
+├─ 6  terraform apply -target='module.vm["<vm-name>"]'
+│      │
+│      ├─ IPAM      next_free_ip.sh → first free address
+│      ├─ CLONE     from hardened template (prevent_destroy = true)
+│      ├─ GUESTINFO inject cloud-init payload (base64, via vApp)
+│      └─ WAIT      poll SSH until cloud-init reports "done"
+├─ 7  Cleanup — decrypted creds removed, even on failure     (trap)
+├─ 8  IP auto-sync — rewrite config ip_address + filename    (R3)
+└─ 9  Report the assigned IP
+```
+
+The pipeline is **idempotent** — run it again and nothing changes (R2) unless the
+config is new (R1) or actually changed (R3). The sync loop
+(`deploy-sync.sh`) runs this pipeline for every new/changed config file
+automatically.
 
 ---
 
@@ -395,6 +464,34 @@ datastore = "datastore99"   # ← prod only; everything else inherits the top-le
 | Network | DHCP / Static | Static |
 | Extra users | Username + password | Optional |
 | Auto-updates | Disable for prod | Optional |
+
+---
+
+## 🛣️ From Zero to a Production-Grade VM
+
+The complete journey — from an empty server to a hardened, production-ready VM:
+
+| Phase | Step | What happens | Where |
+|-------|------|--------------|-------|
+| 0 | **Bootstrap the host** | Install every dependency: Terraform, govc, SOPS, age, jq… (idempotent) | `setup-deps.sh --yes` |
+| 1 | **Onboard vCenter** | Register server + datacenter → auto-creates `deploy/` + `secure/` dirs, per-env overrides, and encrypts credentials | `vcenter-setup.sh` |
+| 2 | **Prepare the template** | One-time per vCenter: Ubuntu with `open-vm-tools` + cloud-init + VMware GuestInfo, LVM-friendly partitioning | manual (documented) |
+| 3 | **Create the config** | Answer 3 prompts → free IP auto-assigned, LVM layout, SSH key, users | `create-vm-config.sh` |
+| 4 | **Deploy** | One VM targeted, others untouched — or drop the file and let the loop do it | `deploy-vm.sh` / `deploy-sync.sh` |
+| 5 | **Verify** | Confirm IPs + cloud-init completion, SSH in | `terraform output vms` / `cloud_init_status` |
+| 6 | **Production hardening** | Auto-updates off (default), optional Prometheus `node_exporter` — baked into the deploy | config flags |
+| 7 | **Backup & lifecycle** | Rotating backups, safe destroy (nothing disappears by accident) | `backup.sh` |
+
+**The result** — in about **2–3 minutes** a production-grade VM lands:
+
+- ✅ Cloned from a hardened template
+- ✅ Static IP + DNS + gateway, no IP conflicts (guarded)
+- ✅ LVM + swap provisioned with a sensible partition layout
+- ✅ SSH-key-only access (no passwords)
+- ✅ Auto-updates disabled for stable, predictable behavior
+- ✅ Optional `node_exporter` running, ready for Prometheus / Grafana
+- ✅ Your config file stayed in sync — the truth is on disk
+- ✅ Every other VM untouched, and the VM itself is destroy-protected
 
 ---
 
