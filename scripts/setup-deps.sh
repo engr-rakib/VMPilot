@@ -87,18 +87,35 @@ terraform_ok() {
   [ "${cur_major:-0}" -eq "${want_major}" ] && [ "${cur_minor:-0}" -ge "${want_minor}" ]
 }
 
+# binary download platform tokens (terraform/govc/sops all name files by OS+arch)
+# OS_KERNEL → "linux" | "darwin" ; arch() → amd64/arm64 ; tarball_arch → x86_64/aarch64
+os_token() { case "$OS_KERNEL" in Darwin) echo darwin;; *) echo linux;; esac; }
+
 github_latest() { # $1=owner/repo ; prints latest release tag (vX.Y.Z)
   curl -fsSL "https://api.github.com/repos/$1/releases/latest" 2>/dev/null \
     | grep -oP '"tag_name"\s*:\s*"\K[^"]+' || true
 }
 
 # ─── OS / package manager detection ──────────────────────────────────────
+OS_KERNEL="$(uname -s)"
+OS_ARCH="$(arch)"
+BIN_DIR="/usr/local/bin"
 PM=""
-if have apt-get; then PM="apt"
-elif have dnf; then PM="dnf"
-elif have yum; then PM="yum"
-else die "Unsupported distro: need apt-get, dnf or yum."
-fi
+case "$OS_KERNEL" in
+  Darwin)
+    PM="brew"
+    have brew || die "macOS requires Homebrew — install from https://brew.sh first."
+    BIN_DIR="$(brew --prefix)/bin"
+    ;;
+  Linux)
+    if have apt-get; then PM="apt"
+    elif have dnf; then PM="dnf"
+    elif have yum; then PM="yum"
+    else die "Unsupported distro: need apt-get, dnf or yum."
+    fi
+    ;;
+  *) die "Unsupported OS: $OS_KERNEL (use Linux or macOS)." ;;
+esac
 
 # ─── header ──────────────────────────────────────────────────────────────
 clear 2>/dev/null || true
@@ -116,6 +133,7 @@ PACKAGES="jq git curl wget unzip openssl ca-certificates"
 [ "$PM" = "apt" ] && PACKAGES="$PACKAGES age gnupg software-properties-common"
 [ "$PM" = "dnf" ] && PACKAGES="$PACKAGES age epel-release"
 [ "$PM" = "yum" ] && PACKAGES="$PACKAGES age epel-release"
+[ "$PM" = "brew" ] && PACKAGES="jq git curl wget unzip age openssl"
 
 if confirm "Install system packages (${PM}: ${PACKAGES})?"; then
   info "Installing system packages via ${PM}..."
@@ -123,6 +141,7 @@ if confirm "Install system packages (${PM}: ${PACKAGES})?"; then
     apt) sudo apt-get update -y && sudo apt-get install -y $PACKAGES ;;
     dnf) sudo dnf install -y $PACKAGES ;;
     yum) sudo yum install -y $PACKAGES ;;
+    brew) brew install $PACKAGES ;;
   esac
   ok "System packages installed."
 else
@@ -148,8 +167,8 @@ if ! have terraform || [ "$(terraform version >/dev/null 2>&1; echo $?)" != "0" 
     fi
     info "Downloading Terraform ${TERRAFORM_VERSION}..."
     curl -fL -o /tmp/tf.zip \
-      "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_$(arch).zip"
-    sudo unzip -o /tmp/tf.zip -d /usr/local/bin/
+      "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_$(os_token)_$(arch).zip"
+    sudo unzip -o /tmp/tf.zip -d "${BIN_DIR}/"
     rm -f /tmp/tf.zip
     ok "Terraform installed: $(terraform version | head -n1)"
   else
@@ -166,8 +185,8 @@ if ! have govc; then
     fi
     info "Downloading govc v${GOVC_VERSION}..."
     curl -fL -o /tmp/govc.tar.gz \
-      "https://github.com/vmware/govmomi/releases/download/v${GOVC_VERSION}/govc_Linux_$(tarball_arch).tar.gz"
-    sudo tar -C /usr/local/bin -xzf /tmp/govc.tar.gz govc
+      "https://github.com/vmware/govmomi/releases/download/v${GOVC_VERSION}/govc_$(case "$OS_KERNEL" in Darwin) echo Darwin;; *) echo Linux;; esac)_$(tarball_arch).tar.gz"
+    sudo tar -C "${BIN_DIR}" -xzf /tmp/govc.tar.gz govc
     rm -f /tmp/govc.tar.gz
     ok "govc installed: $(govc version)"
   else
@@ -186,9 +205,9 @@ if ! have sops; then
     fi
     info "Downloading SOPS v${SOPS_VERSION}..."
     curl -fL -o /tmp/sops \
-      "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.$(arch)"
+      "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.$(os_token).$(arch)"
     chmod +x /tmp/sops
-    sudo mv /tmp/sops /usr/local/bin/sops
+    sudo mv /tmp/sops "${BIN_DIR}/sops"
     ok "SOPS installed: $(sops --version | head -n1)"
   else
     warn "Skipping SOPS install."
