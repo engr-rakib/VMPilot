@@ -307,3 +307,7 @@ New to all of this? Follow exactly this order.
 
 - [Requirements & installation](REQUIREMENTS.md)
 - [Secure/ — encrypted credentials guide](secure/README.md)
+
+---
+
+*© 2026 [Rakibuzzaman (Engr. Rakib)](https://engr-rakib.github.io/web) — VMPilot. Part of the VMPilot project (see [`AUTHORS.md`](../AUTHORS.md) & [`LICENSE`](../LICENSE)).*

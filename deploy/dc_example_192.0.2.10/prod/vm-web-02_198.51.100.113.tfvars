@@ -1,3 +1,9 @@
+# ============================================================
+# VMPilot  (c) 2026 Rakibuzzaman (Engr. Rakib)
+# Original author - do not remove this attribution.
+# GitHub: https://github.com/engr-rakib
+# Web:    https://engr-rakib.github.io/web
+# ============================================================
 #############################################################
 # VM config — web-02 (198.51.100.113)
 # Env: prod   |   EXAMPLE / DEMO — DUMMY DATA (RFC 5737 TEST-NET)

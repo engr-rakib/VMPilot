@@ -266,3 +266,7 @@ it may have leaked.
 | `scripts/sops-encrypt.sh` | Encrypt plaintext dir → `secure/<dir>/` |
 | `scripts/sops-decrypt.sh` | Decrypt → `terraform/*.auto.tfvars`, with `--clean`/`--apply` |
 | `~/.config/sops/age/keys.txt` | age private key (never commit, never share) |
+
+---
+
+*© 2026 [Rakibuzzaman (Engr. Rakib)](https://engr-rakib.github.io/web) — VMPilot. Part of the VMPilot project (see [`AUTHORS.md`](../AUTHORS.md) & [`LICENSE`](../LICENSE)).*

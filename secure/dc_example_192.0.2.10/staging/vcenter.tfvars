@@ -1,3 +1,9 @@
+# ============================================================
+# VMPilot  (c) 2026 Rakibuzzaman (Engr. Rakib)
+# Original author - do not remove this attribution.
+# GitHub: https://github.com/engr-rakib
+# Web:    https://engr-rakib.github.io/web
+# ============================================================
 # Per-env override — secure/dc_example_192.0.2.10/staging/vcenter.tfvars
 # EXAMPLE / DEMO — DUMMY DATA.
 # All keys commented → this environment inherits EVERY top-level value.

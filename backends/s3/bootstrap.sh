@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# ============================================================
+# VMPilot  (c) 2026 Rakibuzzaman (Engr. Rakib)
+# Original author - do not remove this attribution.
+# GitHub: https://github.com/engr-rakib
+# Web:    https://engr-rakib.github.io/web
+# ============================================================
 set -euo pipefail
 
 # bootstrap.sh - create S3 bucket and DynamoDB table for Terraform remote state
