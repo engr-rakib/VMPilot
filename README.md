@@ -505,6 +505,14 @@ The complete journey — from an empty server to a hardened, production-ready VM
 
 ## 🚀 Quick Start
 
+**One-line install — any Linux/macOS host (installs deps + clones repo + terraform init):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/engr-rakib/VMPilot/main/install.sh | bash
+```
+
+Or clone + install manually:
+
 ```bash
 # 0. Fresh host? Install every dependency:
 bash scripts/setup-deps.sh --yes
