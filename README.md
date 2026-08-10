@@ -473,6 +473,13 @@ datastore = "datastore99"   # ← prod only; everything else inherits the top-le
 | Extra users | Username + password | Optional |
 | Auto-updates | Disable for prod | Optional |
 
+### 13. S3 Remote-State Backend
+
+Running several machines off the same repo means they must share one Terraform state — the optional S3 backend keeps it locked and versioned in your AWS account instead of a local file.
+
+- Full setup & walkthrough: [`backends/s3/README.md`](backends/s3/README.md)
+- One-shot bootstrap: [`backends/s3/bootstrap.sh`](backends/s3/bootstrap.sh)
+
 ---
 
 ## 🛣️ From Zero to a Production-Grade VM
@@ -589,7 +596,7 @@ bash scripts/backup.sh <project-root> /backups
 
 - [ ] Standalone `pre-apply-check.sh` with an 8-point pre-flight checklist
 - [ ] `destroy.sh` wrapper with state backup + explicit confirmation
-- [x] Optional S3 remote-state backend (`backends/s3/bootstrap.sh`)
+- [x] Optional S3 remote-state backend ([`backends/s3/bootstrap.sh`](backends/s3/bootstrap.sh) · [docs](backends/s3/README.md))
 - [ ] Multi-cluster / multi-datacenter placement logic
 
 ---
@@ -598,6 +605,7 @@ bash scripts/backup.sh <project-root> /backups
 
 - **Requirements & installation:** [`REQUIREMENTS.md`](REQUIREMENTS.md)
 - **Encrypted credentials guide:** [`secure/README.md`](secure/README.md)
+- **S3 remote-state backend:** [`backends/s3/README.md`](backends/s3/README.md)
 
 ---
 
