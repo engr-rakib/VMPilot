@@ -28,6 +28,13 @@ secure/
 > `secure/{dev,prod,staging}/` dirs are kept in parallel but no longer used.
 > Adding a second vCenter creates its own `secure/<datacenter>_<server>/` automatically.
 
+> **📖 Committed demo:** `secure/dc_example_192.0.2.10/` is a committed **example
+> vCenter** (100% dummy data — RFC 5737 TEST-NET) that mirrors the real layout:
+> `credentials.tfvars` + `vcenter.tfvars` + `{dev,prod,staging}/vcenter.tfvars`
+> overrides (prod shows `datastore99`). Deploy mirror:
+> `deploy/dc_example_192.0.2.10/{dev,prod,staging}/vm-*.tfvars`. Never point the
+> example name or its dummy values at real infrastructure.
+
 ---
 
 ## 2. Quick Start (fastest path)
