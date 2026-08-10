@@ -1,3 +1,9 @@
+# ============================================================
+# VMPilot  (c) 2026 Rakibuzzaman (Engr. Rakib)
+# Original author - do not remove this attribution.
+# GitHub: https://github.com/engr-rakib
+# Web:    https://engr-rakib.github.io/web
+# ============================================================
 #############################################################
 # VM config — db-01 (198.51.100.114)
 # Env: staging   |   EXAMPLE / DEMO — DUMMY DATA (RFC 5737 TEST-NET)

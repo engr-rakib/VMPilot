@@ -1,3 +1,9 @@
+# ============================================================
+# VMPilot  (c) 2026 Rakibuzzaman (Engr. Rakib)
+# Original author - do not remove this attribution.
+# GitHub: https://github.com/engr-rakib
+# Web:    https://engr-rakib.github.io/web
+# ============================================================
 # Terragrunt Example — Multi-VM Setup (ALTERNATIVE to built-in for_each)
 #
 # NOTE: The root module already supports unlimited VMs via for_each in

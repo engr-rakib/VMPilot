@@ -1,3 +1,9 @@
+# ============================================================
+# VMPilot  (c) 2026 Rakibuzzaman (Engr. Rakib)
+# Original author - do not remove this attribution.
+# GitHub: https://github.com/engr-rakib
+# Web:    https://engr-rakib.github.io/web
+# ============================================================
 /*
 Example S3 backend configuration. Do not commit real bucket names or credentials.
 Copy or reference this file from your Terraform root and provide values via
