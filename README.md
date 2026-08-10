@@ -505,13 +505,44 @@ The complete journey — from an empty server to a hardened, production-ready VM
 
 ## 🚀 Quick Start
 
-**One-line install — any Linux/macOS host (installs deps + clones repo + terraform init):**
+### 🆕 Fresh Setup — run this repo as YOUR project (GitHub reader)
+
+The one-line installer gives you a **fully working copy** — dependencies, keys,
+and Terraform are installed automatically. You do **one** manual configuration
+(your vCenter), and then the app starts working.
 
 ```bash
+# 1. Install (clones repo → ~/VMPilot, installs terraform/govc/sops/age,
+#    generates your own age + SSH keys, runs terraform init — everything auto)
 curl -fsSL https://raw.githubusercontent.com/engr-rakib/VMPilot/main/install.sh | bash
+
+# 2. THE ONLY CONFIG — onboard YOUR vCenter (interactive wizard):
+cd ~/VMPilot
+bash scripts/vcenter-setup.sh
+#    → "Create NEW vCenter" → your server + inventory → press y
+#    (dc_example_192.0.2.10 is a committed DUMMY example — always pick "Create NEW")
+
+# 3. From here the app just works — create a VM config:
+bash scripts/create-vm-config.sh <vcenter> <env> <vm-name>
+
+# 4. Deploy it:
+bash scripts/deploy-vm.sh <vcenter> <env> <vm-name>
 ```
 
-Or clone + install manually:
+**Why no other setup is needed:**
+- Your **age key is generated automatically** and encryption works out of the box
+  (SOPS creation rules are *path-based*; the wizard encrypts with *your* key —
+  no `.sops.yaml` edits required)
+- `vcenter-setup.sh` creates everything: encrypted `secure/<vcenter>/credentials.tfvars`,
+  inventory `vcenter.tfvars`, per-env overrides, and the mirrored
+  `deploy/<vcenter>/{dev,prod,staging}/` directories
+- Every deploy auto-decrypts *your* vCenter's credentials, merges per-env
+  overrides, and targets only the VM you asked for
+
+> ⚠️ **First time on this host?** Manual alternative to the one-liner:
+> `bash scripts/setup-deps.sh --yes` (installs deps + keys + terraform init).
+
+### Already installed — daily use
 
 ```bash
 # 0. Fresh host? Install every dependency:
