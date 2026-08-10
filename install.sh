@@ -89,19 +89,19 @@ ${c_bold}═══════════════════════�
 ${c_bold}   VMPilot installed. Next steps${c_rst}
 ${c_bold}══════════════════════════════════════════════════════${c_rst}
 
-  1. (fresh org only) add your age public key to .sops.yaml
-     Your key was shown above when the age key was generated.
-     It must match the key in ${c_bold}.sops.yaml${c_rst} for encryption to work.
+  Your own age key was generated for SOPS encryption — no .sops.yaml edits
+  needed (creation rules are path-based; encryption uses your key).
 
-  2. Onboard your vCenter (one interactive wizard):
+  1. Onboard YOUR vCenter (one interactive wizard — the only config you need):
      ${c_bold}cd ${VMPILOT_DIR}
      bash scripts/vcenter-setup.sh${c_rst}
        → "Create NEW vCenter" → server + inventory → press ${c_bold}y${c_rst}
+       (the committed dc_example_192.0.2.10 is a dummy example — pick "Create NEW")
 
-  3. Create a VM config (auto-stored in deploy/<vcenter>/<env>/):
+  2. Create a VM config (auto-stored in deploy/<vcenter>/<env>/):
      ${c_bold}bash scripts/create-vm-config.sh <vcenter> <env> <vm-name>${c_rst}
 
-  4. Deploy it (decrypts creds, merges env override, applies):
+  3. Deploy it (decrypts creds, merges env override, applies):
      ${c_bold}bash scripts/deploy-vm.sh <vcenter> <env> <vm-name>${c_rst}
 
   Help / docs: README.md · docs/multi-vcenter.md · secure/README.md
