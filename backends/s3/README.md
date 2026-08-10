@@ -30,3 +30,7 @@ aws cloudformation deploy --template-file backends/s3/template.yaml --stack-name
 ```
 
 After creating the resources, copy `backends/s3/backend.tf` into your Terraform root and run `terraform init -migrate-state` when ready.
+
+---
+
+*© 2026 [Rakibuzzaman (Engr. Rakib)](https://engr-rakib.github.io/web) — VMPilot. Part of the VMPilot project (see [`AUTHORS.md`](../AUTHORS.md) & [`LICENSE`](../LICENSE)).*

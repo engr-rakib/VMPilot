@@ -17,6 +17,7 @@
   <a href="#feature-overview"><img src="https://img.shields.io/badge/SOPS-%2B%20Age-4B8BBE" /></a>
   <a href="#feature-overview"><img src="https://img.shields.io/badge/Cloud--Init-%E2%9C%85-brightgreen" /></a>
   <a href="https://github.com/engr-rakib/VMPilot"><img src="https://img.shields.io/github/stars/engr-rakib/VMPilot?style=social" /></a>
+  <a href="https://engr-rakib.github.io/web"><img src="https://img.shields.io/badge/Author-Engr.%20Rakib-181717?style=for-the-badge" /></a>
 </p>
 
 ---
@@ -65,6 +66,8 @@ keys, and even keeping your config file in sync with reality.
 - [Quick Start](#-quick-start)
 - [Tech Stack](#-tech-stack)
 - [Roadmap](#-roadmap)
+- [Support](#-support)
+- [Author & License](#-author--license)
 
 ---
 
@@ -609,7 +612,26 @@ bash scripts/backup.sh <project-root> /backups
 
 ---
 
+## 👤 Author & License
+
+**VMPilot** is the original work of **Rakibuzzaman (Engr. Rakib)** — Server Administrator
+at Walton Hi-Tech Industries PLC, with an M.Sc. in Computer Science (Jahangirnagar
+University) and B.Sc. Eng. in CSE (Daffodil International University).
+
+| | |
+|---|---|
+| **GitHub** | [github.com/engr-rakib](https://github.com/engr-rakib) |
+| **Website** | [engr-rakib.github.io/web](https://engr-rakib.github.io/web) |
+| **Email** | [rakibcse47@gmail.com](mailto:rakibcse47@gmail.com) |
+| **License** | © 2026 Rakibuzzaman — see [`LICENSE`](LICENSE) & [`AUTHORS.md`](AUTHORS.md) |
+
+> All source files carry the author's attribution header. Removing it violates the
+> license terms. Reusing this project? Credit the author and keep the notices intact.
+
+---
+
 <p align="center">
   <b>VMPilot</b> — *"Our infrastructure should run itself — free from manual error."*<br/>
-  <sub>Made with ❤️ using Terraform · vSphere · SOPS</sub>
+  <sub>Made with ❤️ using Terraform · vSphere · SOPS</sub><br/>
+  <b>© 2026 <a href="https://engr-rakib.github.io/web">Rakibuzzaman (Engr. Rakib)</a></b> — all rights reserved.
 </p>
