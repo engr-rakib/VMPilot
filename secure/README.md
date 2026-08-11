@@ -41,7 +41,7 @@ secure/
 ### Step 0 — Prerequisites (once per machine)
 
 ```bash
-bash scripts/setup-deps.sh          # installs sops, terraform, govc, age (creates age + ssh keys)
+bash install.sh          # installs sops, terraform, govc, age (creates age + ssh keys)
 ```
 - age private key at `~/.config/sops/age/keys.txt` (SOPS uses it to decrypt)
 - `scripts/vm-defaults.conf` optionally tweaks the defaults proposed by the wizard
