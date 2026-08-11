@@ -11,12 +11,12 @@
 # Source of truth: per-env override files (dev/prod/staging) merge on
 # top of this — commented keys there inherit these values.
 # ═══════════════════════════════════════════════════════════════════
-datacenter = "dc_example"
-cluster    = "example_cluster"
+datacenter    = "dc_example"
+cluster       = "example_cluster"
 resource_pool = "Resources"
-datastore  = "datastore01"
-network    = "VM Network"
-template   = "ubuntu-24-template"
+datastore     = "datastore01"
+network       = "VM Network"
+template      = "ubuntu-24-template"
 
 # Per-vCenter network defaults (used by create-vm-config.sh + terraform)
 domain      = "example.local"
