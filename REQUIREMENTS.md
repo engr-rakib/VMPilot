@@ -81,8 +81,8 @@ installed automatically (system packages + Terraform + govc + SOPS). It is
 **idempotent** — safe to re-run any time; already-installed tools are skipped.
 
 ```bash
-bash scripts/setup-deps.sh                # interactive (asks before each step)
-bash scripts/setup-deps.sh --yes          # non-interactive: install everything
+bash install.sh                # interactive (asks before each step)
+bash install.sh --yes          # non-interactive: install everything
 ```
 
 ### Options
@@ -99,7 +99,7 @@ You can override a pinned version per tool:
 
 ```bash
 TERRAFORM_VERSION=1.9.8 GOVC_VERSION=0.55.1 SOPS_VERSION=3.13.3 \
-  bash scripts/setup-deps.sh --yes
+  bash install.sh --yes
 ```
 
 ### What it installs
@@ -115,7 +115,7 @@ TERRAFORM_VERSION=1.9.8 GOVC_VERSION=0.55.1 SOPS_VERSION=3.13.3 \
 
 ## 4. Keys: SSH + Age (SOPS)
 
-`setup-deps.sh` can create these for you (interactive mode asks; `--yes` creates
+`install.sh` can create these for you (interactive mode asks; `--yes` creates
 them if missing). If you prefer to do it by hand:
 
 ### 4.1 SSH key (so you can log into deployed VMs)
@@ -285,7 +285,7 @@ New to all of this? Follow exactly this order.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `setup-deps.sh: command not found` | Ran from the wrong directory | `cd <project-root>` first |
+| `bash install.sh` fails / `command not found` | Ran from the wrong directory | `cd <project-root>` first, or use the one-liner: `curl -fsSL …/install.sh \| bash` |
 | `no matching creation rules found` (sops) | Plaintext was outside the project | Put plaintext in `.tmp-sops-plain/` (project root) before encrypting |
 | `Encrypted files not found` | `secure/<dir>/credentials.tfvars` missing | `bash scripts/vcenter-setup.sh` |
 | `Could not auto-find free IP` | Port-group subnet unreachable / all IPs used | Widen `ipam_base_ip` or free an IP |

@@ -142,7 +142,7 @@ Five layers, one config file. You only ever touch **L1** — everything below is
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │ L1  OPERATOR - the CLI you use                                     │
-│ setup-deps.sh · vcenter-setup.sh · create-vm-config.sh             │
+│ install.sh (all-in-one) · vcenter-setup.sh · create-vm-config.sh   │
 │ deploy-vm.sh · deploy-sync.sh · backup.sh                          │
 │ sops-encrypt.sh · sops-decrypt.sh · next_free_ip.sh                │
 ├────────────────────────────────────────────────────────────────────┤
@@ -263,11 +263,11 @@ Drop a new per-VM config file into `deploy/<dir>/<env>/` and the system handles 
 
 ### 3. One-Click Environment Setup
 
-Boot a brand-new Linux host and run one script — every dependency is installed automatically:
+Boot a brand-new Linux host and run one script — it detects the environment and installs everything automatically (deps, keys, terraform init). One command, no extra scripts:
 
 ```
-bash scripts/setup-deps.sh            # interactive
-bash scripts/setup-deps.sh --yes      # fully automatic
+bash install.sh               # same detection, may ask before installing
+bash install.sh --yes         # fully automatic (no prompts)
 ```
 
 - System packages (`jq`, `git`, `curl`, `wget`, `unzip`, `openssl`, `age`, …)
@@ -491,7 +491,7 @@ The complete journey — from an empty server to a hardened, production-ready VM
 
 | Phase | Step | What happens | Where |
 |-------|------|--------------|-------|
-| 0 | **Bootstrap the host** | Install every dependency: Terraform, govc, SOPS, age, jq… (idempotent) | `setup-deps.sh --yes` |
+| 0 | **Bootstrap the host** | Detect + install every dependency: Terraform, govc, SOPS, age, jq… plus keys & `terraform init` (idempotent) | `install.sh --yes` |
 | 1 | **Onboard vCenter** | Register server + datacenter → auto-creates `deploy/` + `secure/` dirs, per-env overrides, and encrypts credentials | `vcenter-setup.sh` |
 | 2 | **Prepare the template** | One-time per vCenter: Ubuntu with `open-vm-tools` + cloud-init + VMware GuestInfo, LVM-friendly partitioning | manual (documented) |
 | 3 | **Create the config** | Answer 3 prompts → free IP auto-assigned, LVM layout, SSH key, users | `create-vm-config.sh` |
@@ -550,13 +550,13 @@ bash scripts/deploy-vm.sh <vcenter> <env> <vm-name>
   overrides, and targets only the VM you asked for
 
 > ⚠️ **First time on this host?** Manual alternative to the one-liner:
-> `bash scripts/setup-deps.sh --yes` (installs deps + keys + terraform init).
+> `bash install.sh --yes` (same thing — installs repo + deps + keys + terraform init).
 
 ### Already installed — daily use
 
 ```bash
-# 0. Fresh host? Install every dependency:
-bash scripts/setup-deps.sh --yes
+# 0. Fresh host? Detect + install every dependency (idempotent, skips what's done):
+bash install.sh --yes
 
 # 1. Configure a vCenter (creates all dependency files automatically):
 bash scripts/vcenter-setup.sh
