@@ -5,6 +5,19 @@
 # GitHub: https://github.com/engr-rakib
 # Web:    https://engr-rakib.github.io/web
 # ============================================================
+
+# ─── Author banner ───────────────────────────────────────────────────────
+# Printed on every run so the origin of this project is always visible.
+vmpilot_banner() {
+  local B='\033[1m' C='\033[0;36m' G='\033[0;32m' NC='\033[0m'
+  echo -e "${C}================================================================================${NC}"
+  echo -e "${C}${B}  VMPilot${NC}  -  VMware vSphere Automation"
+  echo -e "${G}${B}  (c) 2026 Rakibuzzaman (Engr. Rakib)${NC}  -  Original author"
+  echo -e "  GitHub: https://github.com/engr-rakib   |   Web: https://engr-rakib.github.io/web"
+  echo -e "${C}================================================================================${NC}"
+}
+vmpilot_banner
+
 ###############################################################################
 # install.sh — One-line VMPilot installer (works on Linux + macOS)
 ###############################################################################
