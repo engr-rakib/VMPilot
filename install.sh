@@ -139,8 +139,9 @@ github_latest() { # $1=owner/repo → latest release tag (vX.Y.Z), or empty
 }
 
 # ─── "what's next" printout — adapts to what is already configured ──────────
+# Optionally offers to launch the next wizard (only when run interactively).
 next_steps() {
-  local v vcenters="" existed=false
+  local v vcenters="" existed=false yn
   if [ -d "secure" ]; then
     for v in secure/*/; do
       [ -d "$v" ] || continue
@@ -155,8 +156,8 @@ next_steps() {
   if [ "$existed" = true ]; then
     info "Configured vCenters:${vcenters} — onboarding already done."
     echo ""
-    info "  2. Create a VM config:  bash scripts/create-vm-config.sh <vcenter> <env> <vm-name>"
-    info "  3. Deploy it:            bash scripts/deploy-vm.sh <vcenter> <env> <vm-name>"
+    info "  1. Create a VM config:  bash scripts/create-vm-config.sh <vcenter> <env> <vm-name>"
+    info "  2. Deploy it:            bash scripts/deploy-vm.sh <vcenter> <env> <vm-name>"
   else
     info "  1. Onboard YOUR vCenter (the only config you need):"
     echo "     ${c_bold}bash scripts/vcenter-setup.sh${c_rst}"
@@ -167,6 +168,19 @@ next_steps() {
   fi
   echo ""
   info "More help: README.md · secure/README.md · docs/"
+
+  # one-script promise: offer to run the next wizard right away (interactive only)
+  if [ "$INTERACTIVE" = true ] && [ "$existed" = false ]; then
+    echo ""
+    read -rp "$(printf '%s (y/N): ' 'Onboard your vCenter now (interactive wizard)?')" yn
+    if [[ "${yn:-N}" =~ ^[Yy] ]]; then
+      echo ""
+      info "Launching vcenter-setup.sh ..."
+      bash scripts/vcenter-setup.sh
+    else
+      info "OK — run it later with: bash scripts/vcenter-setup.sh"
+    fi
+  fi
 }
 
 # ─── 0. environment detection ───────────────────────────────────────────────
