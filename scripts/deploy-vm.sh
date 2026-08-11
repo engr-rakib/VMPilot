@@ -47,6 +47,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+vmpilot_banner
 
 VCENTER="${1:-}"
 ENV="${2:-}"
