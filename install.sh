@@ -138,22 +138,43 @@ github_latest() { # $1=owner/repo → latest release tag (vX.Y.Z), or empty
     | grep -oP '"tag_name"\s*:\s*"\K[^"]+' || true
 }
 
+# ─── vCenter presence + newest VM config detection ──────────────────────────
+has_vcenter() {  # 0 = a real (non-example) vCenter is configured
+  local v
+  [ -d "secure" ] || return 1
+  for v in secure/*/; do
+    [ -d "$v" ] || continue
+    v="${v#secure/}"; v="${v%/}"
+    [ -n "$v" ] && [ "$v" != "dc_example_192.0.2.10" ] && return 0
+  done
+  return 1
+}
+
+find_newest_vm_config() {  # prints "vcenter env vm-name" of newest vm-*.tfvars
+  local f newest=""
+  f="$(ls -t deploy/*/*/vm-*.tfvars 2>/dev/null | head -n1 || true)"
+  [ -n "$f" ] || return 1
+  f="${f#deploy/}"; newest="${f%%/*}"                 # vcenter
+  f="${f#*/}";    newest="$newest ${f%%/*}"           # env
+  f="${f#*/}";    newest="$newest ${f#vm-}"; newest="${newest%.tfvars}"  # vm-name
+  printf '%s' "$newest"
+}
+
 # ─── "what's next" printout — adapts to what is already configured ──────────
-# Optionally offers to launch the next wizard (only when run interactively).
 next_steps() {
-  local v vcenters="" existed=false yn
+  local v vcenters=""
   if [ -d "secure" ]; then
     for v in secure/*/; do
       [ -d "$v" ] || continue
       v="${v#secure/}"; v="${v%/}"
-      [ -n "$v" ] && [ "$v" != "dc_example_192.0.2.10" ] && { vcenters+=" $v"; existed=true; }
+      [ -n "$v" ] && [ "$v" != "dc_example_192.0.2.10" ] && vcenters+=" $v"
     done
   fi
   echo ""
   echo "${c_bold}══════════════════════════════════════════════════════${c_rst}"
   echo "${c_bold}   VMPilot ready — where to go next${c_rst}"
   echo "${c_bold}══════════════════════════════════════════════════════${c_rst}"
-  if [ "$existed" = true ]; then
+  if [ -n "$vcenters" ]; then
     info "Configured vCenters:${vcenters} — onboarding already done."
     echo ""
     info "  1. Create a VM config:  bash scripts/create-vm-config.sh <vcenter> <env> <vm-name>"
@@ -169,17 +190,53 @@ next_steps() {
   echo ""
   info "More help: README.md · secure/README.md · docs/"
 
-  # one-script promise: offer to run the next wizard right away (interactive only)
-  if [ "$INTERACTIVE" = true ] && [ "$existed" = false ]; then
+  # one-script promise: walk the whole journey now (interactive only)
+  [ "$INTERACTIVE" = true ] && guided_chain
+}
+
+# ─── interactive guided journey: vCenter → VM config → deploy ──────────────
+guided_chain() {
+  local yn vc env name cfg
+
+  # stage A — onboard a vCenter if none exists yet
+  if ! has_vcenter; then
     echo ""
     read -rp "$(printf '%s (y/N): ' 'Onboard your vCenter now (interactive wizard)?')" yn
     if [[ "${yn:-N}" =~ ^[Yy] ]]; then
-      echo ""
-      info "Launching vcenter-setup.sh ..."
+      echo ""; info "Launching vcenter-setup.sh ..."
       bash scripts/vcenter-setup.sh
     else
       info "OK — run it later with: bash scripts/vcenter-setup.sh"
+      return
     fi
+  fi
+
+  # stage B — create a VM config (fully interactive)
+  echo ""
+  read -rp "$(printf '%s (y/N): ' 'Create a VM config now (interactive wizard)?')" yn
+  if [[ "${yn:-N}" =~ ^[Yy] ]]; then
+    echo ""; info "Launching create-vm-config.sh ..."
+    bash scripts/create-vm-config.sh
+  else
+    info "OK — run it later with: bash scripts/create-vm-config.sh"
+    return
+  fi
+
+  # stage C — deploy the config just created (auto-detect the newest one)
+  cfg="$(find_newest_vm_config || true)"
+  if [ -z "$cfg" ]; then
+    info "No VM config found yet — deploy later with: bash scripts/deploy-vm.sh <vcenter> <env> <vm-name>"
+    return
+  fi
+  set -- $cfg
+  vc="$1"; env="$2"; name="$3"
+  echo ""
+  read -rp "$(printf '%s (y/N): ' "Deploy '$name' on '$vc/$env' now?")" yn
+  if [[ "${yn:-N}" =~ ^[Yy] ]]; then
+    echo ""; info "Launching deploy-vm.sh ${vc} ${env} ${name} ..."
+    bash scripts/deploy-vm.sh "$vc" "$env" "$name"
+  else
+    info "OK — run it later with: bash scripts/deploy-vm.sh ${vc} ${env} ${name}"
   fi
 }
 
