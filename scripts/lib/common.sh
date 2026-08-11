@@ -20,6 +20,16 @@ err()      { echo -e "${RED}✗${NC} $*" >&2; }
 die()      { err "$1"; exit 1; }
 error()    { err "$@"; }   # alias for err() — used by deploy scripts
 
+# ─── Author banner ────────────────────────────────────────────────────────
+# Printed on every script run so the project's origin is always visible.
+vmpilot_banner() {
+  echo -e "${CYAN}================================================================================${NC}"
+  echo -e "${CYAN}${BOLD}  VMPilot${NC}  -  VMware vSphere Automation"
+  echo -e "${GREEN}${BOLD}  (c) 2026 Rakibuzzaman (Engr. Rakib)${NC}  -  Original author"
+  echo -e "  GitHub: https://github.com/engr-rakib   |   Web: https://engr-rakib.github.io/web"
+  echo -e "${CYAN}================================================================================${NC}"
+}
+
 # ─── Prompt helpers ──────────────────────────────────────────────────────
 prompt_required() {
   local var="$1" label="$2" def="$3"

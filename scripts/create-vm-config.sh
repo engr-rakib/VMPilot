@@ -42,6 +42,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
+vmpilot_banner
 
 # ─── Central defaults (editable) ─────────────────────────────────────────
 # Edit scripts/vm-defaults.conf to change the defaults proposed by every prompt.
