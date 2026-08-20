@@ -107,6 +107,9 @@ export const getMonitorVc = (vc) => j(fetch(`/api/monitor/${encodeURIComponent(v
 // time-series trend for a vc+kind+entity over the last `hours` (24 default)
 export const getTrends = (vc, kind, entity, hours = 24) =>
   j(fetch(`/api/monitor/trends?vc=${encodeURIComponent(vc)}&kind=${encodeURIComponent(kind)}&entity=${encodeURIComponent(entity)}&hours=${hours}`));
+// per-vCenter trend BUNDLE for the Inventory right-rail (host + datastore series)
+export const getDcTrends = (vc, hours = 24) =>
+  j(fetch(`/api/monitor/dc-trends?vc=${encodeURIComponent(vc)}&hours=${hours}`));
 // operator deploy statistics (from the jobs ledger)
 export const getOperatorStats = () => j(fetch("/api/jobs/operators"));
 // names of configured vCenters (/api/vcenters returns [{vcenter, envs[]}])

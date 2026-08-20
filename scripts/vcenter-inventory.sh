@@ -28,7 +28,7 @@ set -euo pipefail
 # ───────────────────────────────────────────────────────────────────────────
 #   scripts/vcenter-inventory.sh <vcenter> list <key> [--datacenter=DC] [--json]
 #   scripts/vcenter-inventory.sh <vcenter> options [--json]
-#   scripts/vcenter-inventory.sh <vcenter> live vms|hosts|datastores [--json]
+#   scripts/vcenter-inventory.sh <vcenter> live vms|hosts|datastores|alarms [--json]
 #
 #   <key> for `list`: dc|cluster|template|datastore|network|resource_pool|host
 #
@@ -83,6 +83,11 @@ if [ -f "$CRED_FILE" ] && command -v govc &>/dev/null; then
     export GOVC_USERNAME="$VC_USER"
     export GOVC_PASSWORD="$VC_PASS"
     export GOVC_INSECURE=true
+    # Never persist govc sessions to disk: the container's ~/.govmomi session
+    # cache hits a permission-denied on shared mounts and breaks every govc
+    # call. A fresh login per invocation is negligible (results are batched +
+    # cached ~11s in .cache/).
+    export GOVC_PERSIST_SESSION=false
     export TERM=dumb
     GOVC_READY=true
   fi
@@ -577,6 +582,43 @@ live)
       out=$(jq -c '[ (.datastores // .Datastores // [])[]? | {name:.name,
         capacity:(.summary.capacity // .Summary.Capacity // 0),
         free:(.summary.freeSpace // .Summary.FreeSpace // 0)} ]' <<<"$ds_info")
+      fi
+      printf '%s\n' "$out"
+      mkdir -p "${ROOT_DIR}/.cache"
+      printf '%s\n' "$out" >"$LIVE_CACHE" || true
+      ;;
+    alarms)
+      # vCenter-triggered alarms (AlarmManager.triggeredAlarms) — the SAME
+      # alarms the vSphere UI shows (host hardware health, memory/CPU
+      # exhaustion, datastore usage, ...). Compact each to name/status/time/
+      # entity so the WebUI can surface them without re-querying vCenter.
+      # For host-scoped alarms the entity MOID is resolved to a name (the
+      # deep-link target in Inventory).
+      alarm_info=$(govc alarms -json 2>/dev/null || true)
+      if [ -z "$alarm_info" ]; then
+        out="[]"
+      else
+        A_ROWS=()
+        while IFS= read -r _entry; do
+          [ -n "$_entry" ] || continue
+          _name=$(jq -r '(.name.name // .name.systemName // .name // "Unknown alarm")' <<<"$_entry")
+          _status=$(jq -r '(.overallStatus // "unknown")' <<<"$_entry")
+          _time=$(jq -r '(.time // "")' <<<"$_entry")
+          _am=$(jq -r '(.alarm.value // "")' <<<"$_entry")
+          _em=$(jq -r '(.entity.value // "")' <<<"$_entry")
+          _et=$(jq -r '(.entity.type // "")' <<<"$_entry")
+          _ep=$(jq -r '(.path // "")' <<<"$_entry")
+          _msg=$(jq -r '(.event.fullFormattedMessage // "")' <<<"$_entry")
+          [ "$_status" = "green" ] && continue
+          _ename=""
+          [ "$_et" = "HostSystem" ] || [ "$_et" = "VirtualMachine" ] && _ename=$(govc object.collect -s "${_et}:${_em}" name 2>/dev/null || true)
+          A_ROWS+=("$(jq -cn --arg name "$_name" --arg status "$_status" --arg time "$_time" \
+            --arg alarmId "$_am" --arg entityMoid "$_em" --arg entityType "$_et" --arg entityPath "$_ep" \
+            --arg entityName "$_ename" --arg message "$_msg" \
+            '{name:$name, status:$status, time:$time, alarmId:$alarmId, entityMoid:$entityMoid, entityType:$entityType, entityPath:$entityPath, entityName:$entityName, message:$message}')")
+        done < <(jq -c '.[]?' <<<"$alarm_info")
+        out=$(printf '[%s]' "$(IFS=,; printf '%s' "${A_ROWS[*]:-}")")
+        out="$(printf '%s\n' "$out" | jq -c '.')"
       fi
       printf '%s\n' "$out"
       mkdir -p "${ROOT_DIR}/.cache"

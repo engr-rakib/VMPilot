@@ -363,10 +363,10 @@ app.get("/api/monitor", ah(async (req, res) => {
   // Evaluate resource-utilization alerts on every full snapshot poll.
   try { alerts.evaluate(db, snap, config.vmpilotDir); } catch { /* never block the snapshot */ }
   // Persist per-entity metric samples (host cpu/mem/net/disk, datastore used%)
-  // for the trend charts; keep only the last 24h.
+  // for the trend charts; keep only the last 72h (feeds 6h/24h/72h windows).
   try {
     samples.addMany(monitor.collectSamples(snap, Date.now(), config.vmpilotDir));
-    samples.prune(24 * 60 * 60 * 1000);
+    samples.prune(72 * 60 * 60 * 1000);
   } catch { /* trend persistence is best-effort */ }
   res.json({ generated_at: Date.now(), vcenters: snap, alerts: alerts.countUnseen(db) });
 }));
@@ -400,6 +400,23 @@ app.get("/api/monitor/trends", monLimiter, ah(async (req, res) => {
   const from = to - hours * 60 * 60 * 1000;
   const series = samples.series({ vc, kind, entity, fromTs: from, toTs: to });
   res.json({ vc, kind, entity, from, to, points: series });
+}));
+
+// Per-vCenter trend BUNDLE for the Inventory right-rail (Grafana-style panels):
+// one request returns per-entity series for every host/datastore kind
+// (host_cpu|host_mem|host_net|host_disk|ds_used) over the last `hours`.
+// MUST be declared BEFORE /api/monitor/:vc (same route-order trap as /trends).
+app.get("/api/monitor/dc-trends", monLimiter, ah(async (req, res) => {
+  const vc = String(req.query.vc || "");
+  const hours = Math.min(72, Math.max(1, parseInt(req.query.hours || "24", 10) || 24));
+  if (!vc) return res.status(400).json({ error: "vc required" });
+  const to = Date.now();
+  const from = to - hours * 60 * 60 * 1000;
+  const series = samples.grouped({
+    vc, fromTs: from, toTs: to,
+    kinds: ["host_cpu", "host_mem", "host_net", "host_disk", "ds_used"]
+  });
+  res.json({ vc, hours, from, to, series });
 }));
 
 app.get("/api/monitor/:vc", monLimiter, ah(async (req, res) => {

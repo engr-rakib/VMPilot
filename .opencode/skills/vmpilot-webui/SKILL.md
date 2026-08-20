@@ -465,10 +465,85 @@ get rediscovered every session.
     via `offset` in `/api/events` (eventStore.list) + `.ev-pager` Prev/Next; the
     30s poll reads `filterRef` (stale-closure fix) so it never resets page/filter.
     Inline expand = `JobExpand` → `getJob(id)` → `<JobThread>` accordion (no thread
-    navigation; workflow stays on the page); bell deep-link `taskDeep` effect dep =
-    PRIMITIVE `initial.openTaskId` (an object dep re-fires every render). Root-cause
-    trap: `rowToJob` MUST return `output_path` or `/api/jobs/:id/output` 404s → the
-    expand shows a stepper but "no output" (2026-08-20 fix).
+navigation; workflow stays on the page); bell deep-link `taskDeep` effect dep =
+     PRIMITIVE `initial.openTaskId` (an object dep re-fires every render). Root-cause
+     trap: `rowToJob` MUST return `output_path` or `/api/jobs/:id/output` 404s → the
+     expand shows a stepper but "no output" (2026-08-20 fix).
+ 33. **vCenter native alarms → events ledger (2026-08-20).** vCenter UI er triggered
+     alarms (AlarmManager) webui e ashto na — `alerts.evaluate` e shudhu VMPilot er
+     nijer threshold alerts chilo. Add hoyeche: `scripts/vcenter-inventory.sh <vc>
+     live alarms` (`govc alarms -json` → compact rows, green filtered); `monitor.js`
+     `liveAlarms` + `vcSnap.alarms`/`alarms_error`; `alerts.evaluate` reconcile loop
+     (yellow→warn, red→critical, kind `resource`, `src:"alarm:<alarmId>:<entityMoid>"`,
+     label=alarm name, value=message, `vm`=resolved entity name for HostSystem/
+     VirtualMachine); `db.js` events e `src`/`resolved`/`resolved_at` columns +
+     `resolveBySrc(vc, activeSrcs)` (cleared alarms → `resolved=1`, stay in ledger,
+     excluded from `summary()`/`listUnseen`). RULES: (a) resolve call ONLY when
+     `Array.isArray(vcSnap.alarms) && !vcSnap.alarms_error` — a transient govc
+     failure must never false-resolve every alarm (monitorSnapshot fallback sets
+     `alarms_error:"snapshot failed"`); (b) `dedupeExists` MUST include label+src
+     and `resolved=0` — resolved rows are the re-trigger gate, never the blocker;
+     (c) alarm rows route by `src` (alarm:) NOT label prefix (alarm names are
+     free-form) — EventsView `evActions`/Shell `openNotify`/NotifyBell; (d) resolved
+     rows render dimmed + `✓ resolved` tag (`resolvedLabel`), never disappear
+     (bidirectional). ROOT-CAUSE env fix in the script: `GOVC_PERSIST_SESSION=false`
+     (container `~/.govmomi/sessions` permission-denied breaks EVERY govc call) and
+     entity-name collect needs `<Type>:<moid>` prefix (`govc object.collect -s
+     VirtualMachine:vm-24 name` — bare MOID returns "not found").
+     Feature doc: `vmpilot-webui/docs/features/vcenter-alarms.md`.
+ 34. **Inventory header = datacenter PHYSICAL capacity + utilization (CapBars),
+     and the right rail = one batch endpoint (2026-08-20).** The header used to
+     show VM-CONFIGURED sums via `envTotals()` HBars (16 vCPU / 30 GB / 338 GB)
+     — those looked WRONG next to the host table (26 cores / ~80 GB) and the
+     user called it out ("data cnter er cpu am disk calclution maybe thik nai").
+     Now the header CapBars shows: vCPU = sum of host `cpuCores`, RAM = sum of
+     host `memoryMB`, Disk = sum of datastore `capacity` — each with an
+     aggregate utilization % (`dcCpuPct/dcMemPct/dcDsPct`), and the configured
+     totals are preserved in a `.vc-cap-note` ("allocated to VMs …") so nothing
+     is silently removed (bidirectional rule). RULES: (a) `pct` stays `null`
+     (renders "—", never NaN / a full-width bar) when a live source is missing
+     — guard each with `hostMhzTot && hosts.some(h => h.cpuUsageMHz != null)`;
+     (b) `noLive` (no hosts OR no datastores) adds a "no live host/datastore
+     data" note; (c) the card body is now `.vc-body` grid (`minmax(0,1fr) 400px`
+     = main + rail) collapsing to 1 column ≤1240px — keep `.vc-side` content
+     `min-width:0` and `.trend-svg{width:100%}` so charts shrink with the column.
+     The **right rail** (`DcTrends`) renders 5 TrendChart panels (CPU / Memory /
+     Datastore used / Net I/O / Disk I/O), one line per host/datastore, with
+     6h/24h/72h window chips, fetched via ONE batch call `getDcTrends(vc, hours)`
+     → `/api/monitor/dc-trends` (server `sampleStore.grouped()` = one SQL query,
+     down-sampled to ≤500 pts/entity). RULES: (d) `dc-trends` MUST be declared
+     BEFORE `/api/monitor/:vc` (route-order trap, same as `/trends`); (e) the
+     server prunes samples to **72h now** (was 24h) so the 72h window is real;
+     (f) `samples` rows append ONLY on the `/api/monitor` full-snapshot poll —
+     a fresh Inventory visit may show "no trend samples yet" until a
+     Dashboard/Monitor poll runs (accepted, same as VmRow trends); (g) trend
+     series `key` MUST be `"net"`/`"diskio"` for the KB/s hover format (TrendChart
+     checks those keys) and `unit:"KB/s"` only for net/disk kinds (pct kinds
+     scale 100). Feature doc: `docs/pages/inventory.md`.
+ 34. **Inventory datacenter summary = PHYSICAL capacity + right-rail trends
+     (2026-08-20).** The old VcCard header summed VM-CONFIGURED totals
+     (`envTotals()`: vCPU 16 / RAM 30G / Disk 338G) via HBars — that looks wrong
+     next to the host rows (26 cores / 80GB), so the header now uses `CapBars`
+     (charts.js) showing DATACENTER PHYSICAL capacity + aggregate utilization:
+     vCPU = sum(host.cpuCores), RAM = sum(host.memoryMB) GB, Disk =
+     sum(datastore.capacity) TB, each with a usage % (host CPU/MEM usage,
+     datastore used%). RULES: (a) capacity/pct stay `null` when live host/
+     datastore data is missing or usage fields absent (`.some(...)!=null` guard) →
+     CapBars renders "—" + 0-width fill, NEVER NaN or a full-width bar (numeric-edge
+     rule); (b) VM-configured totals are NOT lost — they render as a secondary
+     "allocated to VMs" note (`.vc-cap-note`) so the change is additive, not
+     destructive; (c) new batch endpoint `/api/monitor/dc-trends?vc=&hours=`
+     (declared BEFORE `/api/monitor/:vc` — same route-order trap as `/trends`;
+     server `samples.grouped()` = ONE query → `{kind:{entity:pts}}`, downsampled
+     ≤500/entity; `prune` extended 24h→72h so 72h windows are real). Right rail:
+     `.vc-body` grid (`minmax(0,1fr) 400px`, collapses 1-col ≤1280px) with
+     `.vc-side` = `DcTrends` → 5 TrendChart panels (CPU/Mem/Datastore/Net IO/Disk
+     IO), 6h/24h/72h chips, 30s SWR (last-good on error), per-panel empty →
+     "— no trend data yet". Series `key` must be `"net"`/`"diskio"` for KB/s
+     hover formatting; `unit:"KB/s"` only for net/disk kinds (pct kinds scale
+     100). Samples append ONLY on the `/api/monitor` full poll (NOT `/api/monitor/
+     :vc`) — a fresh Inventory visit may show "no trend samples yet" until a
+     poll runs. `monLimiter` = 120 req/min on monitor routes.
 
 ## PAGE MAP (page-wise blueprint — read before editing any page)
 
@@ -476,8 +551,8 @@ get rediscovered every session.
 |------|-----------|---------------|--------------|
 | Shell / Workspace (layout + thread) | `Shell.js` (owns nav, tree, `sel`, `thread`, `monitorFocus`, `taskDeep`, pips) + `app.js` | — | — |
 | Dashboard | `Dashboard.js` | `/api/monitor`, `/api/monitor/trends`, `/api/alerts` | events-activity |
-| Inventory (Monitor) | `Monitor.js` (VcCard/VmRow/MiniBar) | `/api/monitor/:vc`, `/api/monitor/trends`, `/api/discover`, power via govc | disk-expand (Grow), guest-troubleshoot |
-| Events & Activity | `EventsView.js` (+ JobThread, NotifyBell) | `/api/events`, `/api/events/summary`, `/api/tasks`, `/api/jobs` | events-activity, events-workflow |
+| Inventory (Monitor) | `Monitor.js` (VcCard/VmRow/MiniBar/CapBars/DcTrends) | `/api/monitor/:vc`, `/api/monitor/trends`, `/api/monitor/dc-trends`, `/api/discover`, power via govc | disk-expand (Grow), guest-troubleshoot |
+| Events & Activity | `EventsView.js` (+ JobThread, NotifyBell) | `/api/events`, `/api/events/summary`, `/api/tasks`, `/api/jobs` | events-activity, events-workflow, vcenter-alarms |
 | Backups | `BackupPanel.js` | `POST /api/jobs` (backup/restore) | events-workflow |
 | Terminal / Console | `Terminal.js`, `ConsoleView.js`, `ConsolePip.js`, `PipWindow.js`, `ExpandConsole.js` | socket `/terminal`, `/console` | console-pip |
 | Settings | `SettingsView.js` (Users/Roles/Alerting) | `/api/users`, `/api/roles`, `/api/settings/*` | — |

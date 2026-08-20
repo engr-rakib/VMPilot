@@ -191,6 +191,33 @@ function evaluate(db, snapshots, vmpilotDir = "") {
         }
       }
     }
+    // vCenter native alarms (AlarmManager triggered alarms) — the SAME alarms
+    // the vSphere UI shows (host health, memory/CPU exhaustion, HA failover…).
+    // Surfaced as resource alerts so they land in Notifications + Events.
+    //   • deduped per src (alarm identity + entity) — one event per alarm
+    //   • yellow → warn, red → critical (green rows are already filtered by
+    //     the inventory script)
+    //   • alarms vCenter has since cleared are marked resolved: they stay in
+    //     the ledger as history but stop counting toward the unseen bell.
+    //     Guarded by !alarms_error so a transient govc failure never
+    //     false-resolves every alarm.
+    if (Array.isArray(vcSnap.alarms) && !vcSnap.alarms_error) {
+      const alarmSrcs = [];
+      for (const a of vcSnap.alarms) {
+        const sev = a.status === "red" ? "critical" : a.status === "yellow" ? "warn" : "info";
+        if (sev === "info") continue;
+        const src = `alarm:${a.alarmId || "?"}:${a.entityMoid || ""}`;
+        alarmSrcs.push(src);
+        const vm = (a.entityType === "HostSystem" || a.entityType === "VirtualMachine") ? (a.entityName || a.entityPath || "") : "";
+        add({
+          kind: "resource", severity: sev, vc, env: "", vm,
+          label: a.name || "vCenter alarm",
+          value: (a.message || "").slice(0, 160),
+          src
+        });
+      }
+      events.resolveBySrc(vc, alarmSrcs);
+    }
   }
   return events.list({ limit: MAX_EVENTS });
 }

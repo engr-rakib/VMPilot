@@ -76,6 +76,18 @@ function openDb(dataDir) {
   if (!ecols.includes("user")) {
     db.exec("ALTER TABLE events ADD COLUMN user TEXT;");
   }
+  // vCenter-alarm events: `src` carries a stable identity ("alarm:<alarmId>:<entity>")
+  // for dedupe + resolve; `resolved`/`resolved_at` mark alarms vCenter has since
+  // cleared so they stop counting as unseen while staying in the ledger.
+  if (!ecols.includes("src")) {
+    db.exec("ALTER TABLE events ADD COLUMN src TEXT;");
+  }
+  if (!ecols.includes("resolved")) {
+    db.exec("ALTER TABLE events ADD COLUMN resolved INTEGER NOT NULL DEFAULT 0;");
+  }
+  if (!ecols.includes("resolved_at")) {
+    db.exec("ALTER TABLE events ADD COLUMN resolved_at INTEGER;");
+  }
   return db;
 }
 
@@ -108,7 +120,10 @@ const rowToEvent = (r) => ({
   at: r.at,
   seen: !!r.seen,
   notified: !!r.notified,
-  notify_error: r.notify_error
+  notify_error: r.notify_error,
+  src: r.src,
+  resolved: !!r.resolved,
+  resolved_at: r.resolved_at
 });
 
 const rowToUser = (r) => ({
@@ -179,11 +194,11 @@ function makeEventStore(db) {
   return {
     create(e) {
       db.prepare(
-        `INSERT INTO events (id, kind, severity, vc, env, vm, label, value, task_id, user, at, seen, notified, notify_error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO events (id, kind, severity, vc, env, vm, label, value, task_id, user, at, seen, notified, notify_error, src)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       ).run(e.id, e.kind, e.severity, e.vc ?? null, e.env ?? null, e.vm ?? null,
             e.label, e.value ?? null, e.task_id ?? null, e.user ?? null, e.at ?? Date.now(),
-            e.seen ? 1 : 0, e.notified ? 1 : 0, e.notify_error ?? null);
+            e.seen ? 1 : 0, e.notified ? 1 : 0, e.notify_error ?? null, e.src ?? null);
     },
     list({ vc, env, vm, kind, severity, limit = 200, offset = 0 } = {}) {
       const where = [];
@@ -199,14 +214,14 @@ function makeEventStore(db) {
       return db.prepare(sql).all(...args).map(rowToEvent);
     },
     listUnseen(limit = 100) {
-      return db.prepare("SELECT * FROM events WHERE seen = 0 ORDER BY at DESC LIMIT ?")
+      return db.prepare("SELECT * FROM events WHERE seen = 0 AND resolved = 0 ORDER BY at DESC LIMIT ?")
         .all(limit).map(rowToEvent);
     },
     markSeen(ids) {
       for (const id of ids || []) {
         db.prepare("UPDATE events SET seen = 1 WHERE id = ?").run(id);
       }
-      return db.prepare("SELECT COUNT(*) AS c FROM events WHERE seen = 0").get().c;
+      return db.prepare("SELECT COUNT(*) AS c FROM events WHERE seen = 0 AND resolved = 0").get().c;
     },
     markNotified(id, error) {
       if (error) db.prepare("UPDATE events SET notified = 1, notify_error = ? WHERE id = ?").run(String(error), id);
@@ -222,9 +237,26 @@ function makeEventStore(db) {
     dedupeExists(e) {
       const r = db.prepare(
         `SELECT id FROM events WHERE vc = ? AND COALESCE(env,'') = ? AND COALESCE(vm,'') = ?
-         AND kind = ? AND severity = ? LIMIT 1`
-      ).get(e.vc ?? null, e.env ?? "", e.vm ?? "", e.kind, e.severity);
+         AND kind = ? AND severity = ? AND COALESCE(label,'') = ? AND COALESCE(src,'') = ?
+         AND resolved = 0 LIMIT 1`
+      ).get(e.vc ?? null, e.env ?? "", e.vm ?? "", e.kind, e.severity, e.label ?? "", e.src ?? "");
       return !!r;
+    },
+    // Mark alarm-sourced events (src) that are no longer in the active set as
+    // resolved. Only rows that are currently unresolved are touched, so a
+    // re-triggered alarm starts a fresh event (dedupe ignores resolved rows).
+    resolveBySrc(vc, activeSrcs) {
+      const rows = db.prepare("SELECT id, src FROM events WHERE vc = ? AND src IS NOT NULL AND resolved = 0").all(vc);
+      const active = new Set(activeSrcs || []);
+      const now = Date.now();
+      let n = 0;
+      for (const r of rows) {
+        if (r.src && !active.has(r.src)) {
+          db.prepare("UPDATE events SET resolved = 1, resolved_at = ? WHERE id = ?").run(now, r.id);
+          n++;
+        }
+      }
+      return n;
     },
     // Any event for this VM within the last windowMs — used to suppress the
     // "VM DOWN" alert when the operator powered it off intentionally (the power
@@ -237,9 +269,11 @@ function makeEventStore(db) {
       return !!r;
     },
     summary() {
-      const sev = db.prepare("SELECT severity, COUNT(*) AS c FROM events GROUP BY severity").all();
-      const kind = db.prepare("SELECT kind, COUNT(*) AS c FROM events GROUP BY kind").all();
-      const unseen = db.prepare("SELECT COUNT(*) AS c FROM events WHERE seen = 0").get().c;
+      // Counts reflect ACTIVE alerts: resolved (vCenter alarm cleared) rows are
+      // excluded so the stat cards / unseen badge never re-alert on history.
+      const sev = db.prepare("SELECT severity, COUNT(*) AS c FROM events WHERE resolved = 0 GROUP BY severity").all();
+      const kind = db.prepare("SELECT kind, COUNT(*) AS c FROM events WHERE resolved = 0 GROUP BY kind").all();
+      const unseen = db.prepare("SELECT COUNT(*) AS c FROM events WHERE seen = 0 AND resolved = 0").get().c;
       return {
         by_severity: Object.fromEntries(sev.map((r) => [r.severity, r.c])),
         by_kind: Object.fromEntries(kind.map((r) => [r.kind, r.c])),
@@ -324,6 +358,35 @@ function makeSampleStore(db) {
            AND ts >= ? AND ts <= ?
          ORDER BY ts ASC LIMIT ?`
       ).all(vc, kind, entity, fromTs, toTs, limit).map((r) => ({ ts: r.ts, value: r.value }));
+    },
+    // series for every entity of the given kinds over [fromTs, toTs], grouped
+    // as { kind: { entity: [{ts,value}] } } — one query serves the whole
+    // Inventory right-rail. Entities are downsampled to ≤ `limit` points
+    // (evenly spaced, keeps the full window span) so a 72h fetch stays cheap.
+    grouped({ vc, fromTs, toTs, kinds = [], limit = 500 }) {
+      const rows = db.prepare(
+        `SELECT kind, entity, ts, value FROM samples
+         WHERE vc = ? AND ts >= ? AND ts <= ?
+         ORDER BY kind, entity, ts ASC`
+      ).all(vc, fromTs, toTs);
+      const out = {};
+      for (const k of kinds) out[k] = {};
+      for (const r of rows) {
+        const e = out[r.kind];
+        if (!e) continue;
+        const arr = e[r.entity] || (e[r.entity] = []);
+        arr.push({ ts: r.ts, value: r.value });
+      }
+      for (const k of kinds) {
+        for (const en of Object.keys(out[k])) {
+          const pts = out[k][en];
+          if (pts.length > limit) {
+            const step = pts.length / limit;
+            out[k][en] = pts.filter((_, i) => Math.floor(i / step) !== Math.floor((i + 1) / step) || i === pts.length - 1);
+          }
+        }
+      }
+      return out;
     },
     // latest value for each entity of a kind (vc-agnostic, for quick checks)
     latest(kind, vc) {

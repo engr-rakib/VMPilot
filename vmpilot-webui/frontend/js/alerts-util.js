@@ -15,6 +15,8 @@ export const highFor = (e) => {
 
 export const alertSuggest = (e) => {
   if (!e || e.kind !== "resource") return "";
+  if ((e.src || "").startsWith("alarm:"))
+    return "vCenter-triggered alarm — see vSphere → Monitor for the alarm details and affected entity.";
   const l = (e.label || "").toLowerCase();
   const crit = e.severity === "critical";
   if (l.startsWith("host down")) return "Host is down — check power/network. VMs on it are unreachable. See Inventory → Infrastructure for host state.";
@@ -36,4 +38,14 @@ export const suggestLine = (e) => {
   const h = highFor(e);
   if (!s && !h) return "";
   return html`${s}${h ? ` — alerting for ${h}` : ""}`;
+};
+
+// "resolved 3m ago" label for events the source (vCenter alarm) has cleared.
+export const resolvedLabel = (e) => {
+  if (!e || !e.resolved) return "";
+  const at = e.resolved_at;
+  if (!at) return "resolved";
+  const s = Math.max(0, Math.floor((Date.now() - Number(at)) / 1000));
+  const m = Math.floor(s / 60);
+  return s < 60 ? `resolved ${s}s ago` : m < 60 ? `resolved ${m}m ago` : `resolved ${Math.floor(m / 60)}h ago`;
 };

@@ -14,7 +14,7 @@
 import { html, useState, useEffect, useRef } from "/js/core.js";
 import { getEvents, getEventsSummary, getTasks, getJob, listMonitorVcs, markEventsSeen, actionLabel } from "/js/api.js";
 import { Spinner, Pill } from "/js/components.js";
-import { suggestLine } from "/js/alerts-util.js";
+import { suggestLine, resolvedLabel } from "/js/alerts-util.js";
 import JobThread from "/js/views/JobThread.js";
 
 const PAGE = 50;
@@ -207,6 +207,17 @@ export default function EventsView({ resolveVm, onOpenVm, onHost, onVc, initial 
   const evActions = (e) => {
     const label = e.label || "";
     if (e.task_id) return html`<button className="mini" data-tip=${expanded === e.task_id ? "Close log" : "Expand detailed log"} onClick=${() => toggleExpand(e.task_id)}>${expanded === e.task_id ? "▾" : "▸"} log</button>`;
+    // vCenter native alarms (src "alarm:…") point at the entity vCenter names:
+    //   VM → VM config · host → host row · folder/vCenter-level → vCenter card
+    if (e.src && e.src.startsWith("alarm:")) {
+      if (e.vm && onOpenVm && resolveVm && resolveVm(e.vc, e.vm))
+        return html`<button className="mini" data-tip="Open VM config" onClick=${() => openEventVm(e)}>→ cfg</button>`;
+      if (e.vm && onHost)
+        return html`<button className="mini" data-tip="Open this host in Inventory" onClick=${() => openEventHost(e)}>→ host</button>`;
+      if (e.vc && onVc)
+        return html`<button className="mini" data-tip="Open this vCenter in Inventory" onClick=${() => openEventVc(e)}>→ vCenter</button>`;
+      return "";
+    }
     if (label.startsWith("Host ") && e.vm && onHost)
       return html`<button className="mini" data-tip="Open this host in Inventory" onClick=${() => openEventHost(e)}>→ host</button>`;
     if (label.startsWith("Datastore") && e.vc && onVc)
@@ -221,9 +232,11 @@ export default function EventsView({ resolveVm, onOpenVm, onHost, onVc, initial 
   const evWhen = (at) => html`<td className="muted" title=${`${timeAgo(at)} · ${fullDt(at)}`}>${fmtTs(at)}</td>`;
   const evTarget = (e) => html`<td>${[e.vc, e.env, e.vm].filter(Boolean).join(" / ") || "—"}</td>`;
   // Label cell: value + user, plus (for resource alerts) an actionable
-  // suggestion and how long the alert has been active.
+  // suggestion and how long the alert has been active. Resolved alerts (vCenter
+  // alarms that cleared) get a dimmed row + "✓ resolved" tag.
   const evLabel = (e) => html`<td>
     <strong>${e.label}</strong> ${e.value ? html`<span className=${e.severity === "critical" ? "danger" : "warn"}>${e.value}</span>` : ""}${e.user ? html` <span className="muted">· by ${e.user}</span>` : ""}
+    ${e.resolved ? html` <span className="ev-resolved" title=${`${resolvedLabel(e)} · cleared by vCenter`}>✓ ${resolvedLabel(e)}</span>` : ""}
     ${e.kind === "resource" && suggestLine(e) ? html`<div className="ev-suggest">${suggestLine(e)}</div>` : ""}
   </td>`;
 
@@ -278,7 +291,7 @@ export default function EventsView({ resolveVm, onOpenVm, onHost, onVc, initial 
           <thead><tr><th>Type</th><th>Severity/Status</th><th>Label / Action</th><th>Target</th><th>When</th><th></th></tr></thead>
           <tbody>
             ${activity().map((a) => a.kind === "event" ? html`
-              <tr key=${a.key} className=${expanded === a.e.task_id ? "ev-expand-on" : ""}>
+              <tr key=${a.key} className=${(a.e.resolved ? "ev-resolved-row " : "") + (expanded === a.e.task_id ? "ev-expand-on" : "")}>
                 <td>${kindIco(a.e.kind)} ${a.e.kind}</td>
                 <td><${Pill} cls=${sevClass(a.e.severity)}>${a.e.severity}</${Pill}></td>
                 ${evLabel(a.e)}
@@ -321,7 +334,7 @@ export default function EventsView({ resolveVm, onOpenVm, onHost, onVc, initial 
           <thead><tr><th>Type</th><th>Severity</th><th>Label</th><th>Target</th><th>When</th><th></th></tr></thead>
           <tbody>
             ${notifRows().map((e) => html`
-              <tr key=${e.id} className=${(e.seen ? "" : "unseen") + (expanded === e.task_id ? " ev-expand-on" : "")}>
+              <tr key=${e.id} className=${(e.seen ? "" : "unseen") + (e.resolved ? " ev-resolved-row" : "") + (expanded === e.task_id ? " ev-expand-on" : "")}>
                 <td>${kindIco(e.kind)} ${e.kind}</td>
                 <td><${Pill} cls=${sevClass(e.severity)}>${e.severity}</${Pill}></td>
                 ${evLabel(e)}
@@ -362,7 +375,7 @@ export default function EventsView({ resolveVm, onOpenVm, onHost, onVc, initial 
           <thead><tr><th>Type</th><th>Severity</th><th>Label</th><th>Target</th><th>When</th><th></th></tr></thead>
           <tbody>
             ${events.map((e) => html`
-              <tr key=${e.id} className=${expanded === e.task_id ? "ev-expand-on" : ""}>
+              <tr key=${e.id} className=${(e.resolved ? "ev-resolved-row " : "") + (expanded === e.task_id ? "ev-expand-on" : "")}>
                 <td>${kindIco(e.kind)} ${e.kind}</td>
                 <td><${Pill} cls=${sevClass(e.severity)}>${e.severity}</${Pill}></td>
                 ${evLabel(e)}
@@ -464,7 +477,7 @@ export default function EventsView({ resolveVm, onOpenVm, onHost, onVc, initial 
           <thead><tr><th>Type</th><th>Severity</th><th>Label</th><th>Target</th><th>When</th><th></th></tr></thead>
           <tbody>
             ${events.filter((e) => e.kind === "system" || e.kind === "resource").map((e) => html`
-              <tr key=${e.id} className=${expanded === e.task_id ? "ev-expand-on" : ""}>
+              <tr key=${e.id} className=${(e.resolved ? "ev-resolved-row " : "") + (expanded === e.task_id ? "ev-expand-on" : "")}>
                 <td>${kindIco(e.kind)} ${e.kind}</td>
                 <td><${Pill} cls=${sevClass(e.severity)}>${e.severity}</${Pill}></td>
                 ${evLabel(e)}

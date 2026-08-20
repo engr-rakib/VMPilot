@@ -102,6 +102,8 @@
   border-bottom: 1px solid var(--border);
 }
 .notify-item.seen { opacity: 0.55; }
+.notify-item.resolved { opacity: 0.5; }
+.notify-item.resolved .notify-suggest { opacity: 0.7; }
 .notify-ico { font-size: 14px; margin-top: 1px; }
 .notify-body { min-width: 0; }
 .notify-line { font-size: 13px; }

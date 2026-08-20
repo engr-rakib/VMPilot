@@ -81,6 +81,30 @@ export function HBars({ items = [], max, title, unit = "" }) {
     </div>`;
 }
 
+// --- Datacenter capacity bars (Inventory header) ---------------------------
+// items: [{ label, capacity, suffix, pct, color }] — physical capacity +
+// aggregate utilization %. capacity null/NaN → "—"; pct null/NaN → "—" and a
+// 0-width fill (never "NaN" / a full bar). Percent-capped at 100.
+export function CapBars({ items = [] }) {
+  return html`
+    <div className="capbars">
+      ${items.map((it) => {
+        const p = Number(it.pct);
+        const pct = Number.isFinite(p) ? Math.max(0, Math.min(100, p)) : null;
+        const cap = it.capacity == null || Number.isNaN(Number(it.capacity)) ? "—" : `${it.capacity}${it.suffix || ""}`;
+        return html`
+          <div className="capbar" key=${it.label}>
+            <span className="capbar-label" title=${it.label}>${it.label}</span>
+            <span className="capbar-track" title=${`${it.label}: ${pct === null ? "no data" : pct + "% used"}`}>
+              ${pct !== null && html`<span className="capbar-fill" style=${{ width: pct + "%", background: it.color || (pct > 85 ? C.danger : C.accent) }} />`}
+            </span>
+            <span className="capbar-val">${cap}</span>
+            <span className="capbar-pct" style=${{ color: pct !== null && pct > 85 ? C.danger : undefined }}>${pct === null ? "—" : pct + "%"}</span>
+          </div>`;
+      })}
+    </div>`;
+}
+
 // --- MiniBar (per-VM usage in tables) ----------------------------------------
 // A compact inline bar: label text + thin track + fill + numeric value.
 export function MiniBar({ value, max = 100, color = C.accent, label, suffix = "", hideValue = false }) {

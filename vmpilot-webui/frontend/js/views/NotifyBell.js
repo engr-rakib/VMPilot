@@ -7,7 +7,7 @@
 //   onOpenAll()    — clicking "view all" → the Events page
 import { html, useState, useEffect, useRef } from "/js/core.js";
 import { getAlerts, getAlertsUnseen, markAlertsSeen, clearAlerts } from "/js/api.js";
-import { suggestLine } from "/js/alerts-util.js";
+import { suggestLine, resolvedLabel } from "/js/alerts-util.js";
 
 const sevIcon = (a) => {
   if (a.kind === "event") return a.severity === "warn" ? "⚠️" : "🔔";
@@ -85,22 +85,27 @@ export default function NotifyBell({ onOpen, onOpenAll }) {
             ${!alerts && html`<p className="muted">loading…</p>`}
             ${alerts && alerts.length === 0 && html`<p className="muted">No notifications yet.</p>`}
             ${(alerts || []).map((a) => html`
-              <div key=${a.id} className=${a.seen ? "notify-item seen" : "notify-item"}
+              <div key=${a.id} className=${(a.seen ? "notify-item seen" : "notify-item") + (a.resolved ? " resolved" : "")}
                 onClick=${() => go(a)}>
                 <span className="notify-ico">${sevIcon(a)}</span>
                 <div className="notify-body">
-                  <div className="notify-line"><strong>${a.label}</strong> ${a.value ? html`<span className=${a.severity === "critical" ? "danger" : "warn"}>${a.value}</span>` : ""}</div>
+                  <div className="notify-line"><strong>${a.label}</strong> ${a.value ? html`<span className=${a.severity === "critical" ? "danger" : "warn"}>${a.value}</span>` : ""}
+                    ${a.resolved ? html` <span className="ev-resolved">✓ ${resolvedLabel(a)}</span>` : ""}</div>
                   ${a.kind === "resource" && suggestLine(a) ? html`<div className="notify-suggest">${suggestLine(a)}</div>` : ""}
                   <div className="notify-sub">
                     ${[a.vc, a.env, a.vm].filter(Boolean).join(" / ") || "—"}
                     ${a.user ? html` <span className="muted">· by ${a.user}</span>` : ""}
                     <span className="muted"> · ${timeAgo(a.at)}</span>
                     ${a.task_id ? html` <span className="muted">→ open task</span>` : a.kind === "resource" && a.vc
-                      ? (a.label || "").startsWith("Host ")
-                        ? html` <span className="muted">→ open host</span>`
-                        : (a.label || "").startsWith("Datastore")
-                          ? html` <span className="muted">→ open vCenter</span>`
-                          : html` <span className="muted">→ open VM</span>`
+                      ? (a.src || "").startsWith("alarm:")
+                        ? a.vm
+                          ? html` <span className="muted">→ open VM/host</span>`
+                          : html` <span className="muted">→ open vCenter</span>`
+                        : (a.label || "").startsWith("Host ")
+                          ? html` <span className="muted">→ open host</span>`
+                          : (a.label || "").startsWith("Datastore")
+                            ? html` <span className="muted">→ open vCenter</span>`
+                            : html` <span className="muted">→ open VM</span>`
                       : ""}
                   </div>
                 </div>

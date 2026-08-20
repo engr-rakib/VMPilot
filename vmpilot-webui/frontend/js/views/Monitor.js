@@ -10,7 +10,8 @@
 import { html, useState, useEffect, useRef } from "/js/core.js";
 import { listMonitorVcs, getMonitorVc, getTrends, getEvents, getConsoleSessions, getGuestData, setVmPower, getTasks, createJob } from "/js/api.js";
 import { Spinner, Pill } from "/js/components.js";
-import { HBars, MiniBar, TrendChart } from "/js/charts.js";
+import { MiniBar, TrendChart } from "/js/charts.js";
+import { dcCapItems, DcDonuts } from "/js/trends.js";
 import ExpandPip from "/js/views/ExpandConsole.js";
 
 const pct = (used, total) => {
@@ -176,6 +177,12 @@ function VcCard({ vc, st, onOpen, onConsole, onJob, loadOne, filter, setFilter, 
   const totalDs = datastores.reduce((a, d) => a + ((d.capacity || 0) - (d.free || 0)), 0);
   const totalDsCap = datastores.reduce((a, d) => a + (d.capacity || 0), 0);
 
+  // Datacenter-level capacity (physical hosts/datastores) + aggregate utilization
+  // via the shared trends helper; feeds the small header donuts.
+  const cap = dcCapItems(v);
+  const dcCapItemsArr = cap.items;
+  const noLive = cap.noLive;
+
   const vmsCpuMax = Math.max(1, ...v.envs.flatMap((e) => e.vms).map((vm) => Number(vm.cpu) || 0));
   const vmsMemMax = Math.max(1, ...v.envs.flatMap((e) => e.vms).map((vm) => (vm.memory_mb || 0) / 1024));
   const allVms = v.envs.flatMap((e) => e.vms);
@@ -197,12 +204,14 @@ function VcCard({ vc, st, onOpen, onConsole, onJob, loadOne, filter, setFilter, 
           ${hosts.length} hosts · ${datastores.length} datastores</span>
       </h3>
 
+      <div className="vc-body">
+      <div className="vc-main">
       <div className="vc-capacity">
-        <${HBars} items=${[
-          { label: "vCPU", value: t.cpu, color: "var(--accent2)" },
-          { label: "RAM", value: Math.round(t.mem), suffix: "G", color: "var(--accent)" },
-          { label: "Disk", value: Math.round(t.disk), suffix: "G", color: "var(--ok)" }
-        ]} />
+        <${CapBars} items=${dcCapItems} />
+        <p className="muted vc-cap-note" title="Configured totals from the VM configs (tfvars) — the datacenter header now shows physical host/datastore capacity + live utilization">
+          allocated to VMs: ${t.cpu} vCPU · ${Math.round(t.mem)} GB · ${Math.round(t.disk)} GB
+          ${noLive ? " · no live host/datastore data" : ""}
+        </p>
       </div>
 
       <div className="mon-sec">
@@ -349,8 +358,84 @@ function VcCard({ vc, st, onOpen, onConsole, onJob, loadOne, filter, setFilter, 
           })}
         `}
       </div>
+      </div>
+      <aside className="vc-side">
+        <${DcTrends} vc=${v.vcenter} />
+      </aside>
+      </div>
     </div>`;
 }
+
+// Right-side Grafana-style trend rail for a vCenter card. One batch call
+// (getDcTrends) returns per-entity series for host CPU/RAM/Net/Disk IO +
+// datastore used%; each panel = a TrendChart with one line per host/datastore.
+// SWR: the last good series stays visible on a failed refresh (never blanks);
+// a failed first load shows an error + Retry. 6h/24h/72h windows (server keeps
+// 72h of samples). Per-panel empty → TrendChart's "— no trend data yet".
+function DcTrends({ vc }) {
+  const [hours, setHours] = useState(24);
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+
+  const load = () => {
+    getDcTrends(vc, hours)
+      .then((r) => { if (r && r.series) { setData(r.series); setErr(""); } })
+      .catch((e) => setErr(e.message || "trends failed"))
+      .finally(() => setRefreshing(false));
+  };
+
+  useEffect(() => {
+    setData(null); setErr(""); setRefreshing(true);
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
+  }, [vc, hours]);
+
+  const s = data || {};
+  const seriesOf = (kind, labelKey) => Object.entries(s[kind] || {}).map(([entity, pts], i) => ({
+    key: labelKey,                       // "net"/"diskio" → formatTrend shows KB/s
+    label: entity,
+    color: RAIL_COLORS[i % RAIL_COLORS.length],
+    points: downSample(pts, 240),
+    unit: kind === "host_net" || kind === "host_disk" ? "KB/s" : "pct"
+  }));
+  const hasAny = ["host_cpu", "host_mem", "host_net", "host_disk", "ds_used"]
+    .some((k) => (s[k] && Object.keys(s[k]).length > 0));
+
+  return html`
+    <div className="dc-rail">
+      <div className="dc-rail-head">
+        <strong>📈 Trends</strong>
+        <div className="dc-range">
+          ${[6, 24, 72].map((h) => html`
+            <button key=${h} className=${hours === h ? "chip active" : "chip"} data-tip=${`Show the last ${h}h of samples`} onClick=${() => setHours(h)}>${h}h</button>`)}
+        </div>
+      </div>
+      ${refreshing && !data && !err ? html`<p className="muted"><${Spinner} inline /> loading trends…</p>`
+        : err && !data ? html`<div className="error">${err} <button className="ghost" onClick=${load}>Retry</button></div>`
+        : !hasAny ? html`<p className="muted">no trend samples yet — they accumulate on every snapshot poll</p>`
+        : html`
+          <${RailPanel} title="CPU — hosts"><${TrendChart} series=${seriesOf("host_cpu", "cpu")} width=${360} height=${110} timeLabel=${hours + "h"} /></${RailPanel}>
+          <${RailPanel} title="Memory — hosts"><${TrendChart} series=${seriesOf("host_mem", "mem")} width=${360} height=${110} timeLabel=${hours + "h"} /></${RailPanel}>
+          <${RailPanel} title="Datastore used"><${TrendChart} series=${seriesOf("ds_used", "ds")} width=${360} height=${110} timeLabel=${hours + "h"} /></${RailPanel}>
+          <${RailPanel} title="Network I/O — hosts"><${TrendChart} series=${seriesOf("host_net", "net")} width=${360} height=${110} timeLabel=${hours + "h"} /></${RailPanel}>
+          <${RailPanel} title="Disk I/O — hosts"><${TrendChart} series=${seriesOf("host_disk", "diskio")} width=${360} height=${110} timeLabel=${hours + "h"} /></${RailPanel}>
+        `}
+    </div>`;
+}
+
+function RailPanel({ title, children }) {
+  return html`<div className="dc-panel"><div className="dc-panel-title">${title}</div>${children}</div>`;
+}
+
+// Evenly downsample to ≤ n points (keeps the window span, trims render cost).
+const downSample = (pts, n) => {
+  if (!Array.isArray(pts) || pts.length <= n) return pts || [];
+  const step = pts.length / n;
+  return pts.filter((_, i) => Math.floor(i / step) !== Math.floor((i + 1) / step) || i === pts.length - 1);
+};
+const RAIL_COLORS = ["#22d3ee", "#2563eb", "#4ade80", "#fbbf24", "#f87171", "#a78bfa", "#34d399", "#f472b6", "#60a5fa", "#facc15"];
 
 // Power menu for a powered-on VM. Rendered position:fixed so it escapes the
 // overflow:hidden table/card ancestors (a relative/absolute menu gets clipped).

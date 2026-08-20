@@ -120,6 +120,10 @@
 .ev-expand-cell .thread-job { border: 1px solid var(--border); border-radius: 10px; }
 .ev-expand-cell .job-output { max-height: 240px; overflow: auto; }
 .ev-suggest { white-space: normal; font-size: 11px; color: var(--muted); margin-top: 2px; line-height: 1.3; }
+/* vCenter alarms that vCenter has since cleared: dimmed row + "✓ resolved" tag */
+.ev-resolved-row td { opacity: 0.55; }
+.ev-resolved-row .ev-suggest { opacity: 0.7; }
+.ev-resolved { display: inline-block; font-size: 10px; font-weight: 600; color: #4ade80; background: rgba(74, 222, 128, 0.12); border: 1px solid rgba(74, 222, 128, 0.35); border-radius: 999px; padding: 0 7px; margin-left: 6px; vertical-align: 1px; white-space: nowrap; }
 
 /* VM monitor row expand + console */
 .vm-chevron { display: inline-block; cursor: pointer; color: var(--muted); transition: transform 0.15s; user-select: none; }
@@ -375,7 +379,30 @@ tr.unseen td { background: rgba(245, 158, 11, 0.06); }
 .minibar-fill { display: block; height: 100%; border-radius: 99px; transition: width 0.4s; }
 .minibar-val { font-size: 11px; font-variant-numeric: tabular-nums; }
 
-.vc-capacity { max-width: 420px; margin: 6px 0 16px; }
+/* ---- Inventory datacenter capacity header (CapBars) ---- */
+.vc-capacity { max-width: 480px; margin: 6px 0 14px; }
+.capbars { display: flex; flex-direction: column; gap: 9px; }
+.capbar { display: flex; align-items: center; gap: 8px; font-size: 11px; min-width: 0; }
+.capbar-label { flex: 0 0 44px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.capbar-track { flex: 1; height: 10px; background: #0a0e13; border: 1px solid var(--border); border-radius: 99px; overflow: hidden; min-width: 40px; }
+.capbar-fill { display: block; height: 100%; border-radius: 99px; transition: width 0.4s; }
+.capbar-val { flex: 0 0 74px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.capbar-pct { flex: 0 0 40px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.vc-cap-note { margin: 8px 0 2px; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- Inventory right rail (Grafana-style trend panels) ---- */
+.vc-body { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 16px; align-items: start; }
+.vc-main { min-width: 0; }
+.vc-side { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.dc-rail { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.dc-rail-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+.dc-rail-head strong { font-size: 13px; }
+.dc-range { display: flex; gap: 4px; }
+.dc-panel { display: flex; flex-direction: column; gap: 4px; padding: 8px 10px; background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; min-width: 0; }
+.dc-panel-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+@media (max-width: 1240px) {
+  .vc-body { grid-template-columns: 1fr; }
+}
 
 /* ---- vc-block / env block (monitor) ---- */
 .vc-block h3 { margin-bottom: 12px; }

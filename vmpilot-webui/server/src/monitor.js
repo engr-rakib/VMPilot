@@ -59,6 +59,13 @@ async function liveDatastores(vmpilotDir, vc) {
   return runLive(vmpilotDir, vc, "datastores");
 }
 
+// Live vCenter-triggered alarms (AlarmManager.triggeredAlarms) — the same
+// alarms the vSphere UI shows. Compact rows from `govc alarms -json`, filtered
+// to non-green (yellow/red).
+async function liveAlarms(vmpilotDir, vc) {
+  return runLive(vmpilotDir, vc, "alarms");
+}
+
 // Read cloud-init status from terraform state (the null_resource provisioner
 // records "VM: cloud-init completed" in state). Falls back to per-env output.
 function cloudInitStatusFromState(vmpilotDir, vc, env) {
@@ -107,8 +114,10 @@ async function monitorVc(vmpilotDir, vc) {
   // Best-effort: failures degrade to empty arrays, never fail the vCenter.
   let hosts = { ok: false, items: [] };
   let datastores = { ok: false, items: [] };
+  let alarms = { ok: false, items: [] };
   try { hosts = await liveHosts(vmpilotDir, vc); } catch { hosts = { ok: false, items: [] }; }
   try { datastores = await liveDatastores(vmpilotDir, vc); } catch { datastores = { ok: false, items: [] }; }
+  try { alarms = await liveAlarms(vmpilotDir, vc); } catch { alarms = { ok: false, items: [] }; }
   const liveByName = new Map((live.ok ? live.vms : []).map((v) => [v.name, v]));
   const liveByIp = new Map((live.ok ? live.vms : []).filter((v) => v.ip).map((v) => [v.ip, v]));
   const envs = [];
@@ -149,6 +158,8 @@ async function monitorVc(vmpilotDir, vc) {
     hosts_error: hosts.ok ? undefined : hosts.error,
     datastores: datastores.ok ? datastores.items : [],
     datastores_error: datastores.ok ? undefined : datastores.error,
+    alarms: alarms.ok ? alarms.items : [],
+    alarms_error: alarms.ok ? undefined : alarms.error,
     envs,
     summary: {
       vm_count: envs.reduce((a, e) => a + e.count, 0),
@@ -169,7 +180,7 @@ async function monitorSnapshot(vmpilotDir) {
     monitorVc(vmpilotDir, vc).catch((e) => ({
       vcenter: vc, envs: [], inventory: {}, has_credentials: false,
       live_ok: false, live_error: String((e && e.message) || e),
-      hosts: [], datastores: [], summary: {
+      hosts: [], datastores: [], alarms: [], alarms_error: "snapshot failed", summary: {
         vm_count: 0, powered_on: 0, powered_off: 0, total_cpu: 0, total_mem_gb: 0, total_disk_gb: 0
       }
     }))
@@ -245,4 +256,4 @@ function collectSamples(snapshots, ts = Date.now(), vmpilotDir = "") {
   return rows;
 }
 
-module.exports = { monitorSnapshot, monitorVc, liveVms, liveHosts, liveDatastores, cloudInitStatusFromState, collectSamples };
+module.exports = { monitorSnapshot, monitorVc, liveVms, liveHosts, liveDatastores, liveAlarms, cloudInitStatusFromState, collectSamples };

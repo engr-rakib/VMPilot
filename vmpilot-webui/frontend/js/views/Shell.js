@@ -144,12 +144,21 @@ export default function Shell({ onAuthed, onLogout }) {
     if (a && a.task_id) { setTaskDeep(a.task_id); setNav("events"); return; }
     // Resource alerts deep-link to Inventory, focused on the object they point at:
     //   Host*  → that host row  ·  Datastore* → that vCenter card  ·  VM* → that VM row
+    //   vCenter alarms (src "alarm:…") → the entity they name: VM → VM row,
+    //   host → host row, folder/vCenter-level → the vCenter card.
     if (a && a.kind === "resource" && a.vc) {
       setNav("monitor");
       const label = a.label || "";
       const isHost = label.startsWith("Host ");
       const isDs = label.startsWith("Datastore");
-      setMonitorFocus({ vc: a.vc, host: isHost ? (a.vm || "") : "", vm: !isHost && !isDs ? (a.vm || "") : "", ts: Date.now() });
+      const isAlarm = (a.src || "").startsWith("alarm:");
+      let host = isHost ? (a.vm || "") : "";
+      let vm = !isHost && !isDs ? (a.vm || "") : "";
+      if (isAlarm && a.vm) {
+        if (resolveVm(a.vc, a.vm)) { host = ""; vm = a.vm; }
+        else { host = a.vm; vm = ""; }
+      }
+      setMonitorFocus({ vc: a.vc, host, vm, ts: Date.now() });
       return;
     }
     setNav("events");
