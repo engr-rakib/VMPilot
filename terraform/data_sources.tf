@@ -48,3 +48,13 @@ data "vsphere_virtual_machine" "template" {
   name          = var.template
   datacenter_id = data.vsphere_datacenter.dc.id
 }
+
+# Per-VM host/node pinning (host_system_id) — only VMs that name a host get one;
+# blank → DRS auto-placement on the cluster (current behaviour).
+data "vsphere_host" "host" {
+  for_each = {
+    for k, v in local.all_configs : k => v.host if v.host != ""
+  }
+  name          = each.value
+  datacenter_id = data.vsphere_datacenter.dc.id
+}

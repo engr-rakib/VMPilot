@@ -164,5 +164,6 @@ echo "=========================================================="
 echo "  Sync done: ${CHANGED} changed, ${SKIPPED} unchanged, ${MISSING_CFG} missing-config warning(s)"
 echo "=========================================================="
 
-[ "$MISSING_CFG" -eq 1 ] && [ "$MODE" = "apply" ] && \
+if [ "$MISSING_CFG" -eq 1 ] && [ "$MODE" = "apply" ]; then
   echo "NOTE: some VMs are in state but have no config file — run destroy.sh explicitly if you want them gone."
+fi
