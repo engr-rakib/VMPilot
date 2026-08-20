@@ -4,6 +4,9 @@
 .terraform/
 .terraform.lock.hcl
 
+# Runtime cache (live vcenter inventory snapshots)
+.cache/
+
 # Secure credentials (everything under secure/ — except README, see below)
 secure/*
 
@@ -59,5 +62,19 @@ deploy/how_to_deploy.md
 # sops age key copy — synced to private repo only (see scripts sync)
 sops-age/
 
+# Web UI job backups (tar.gz of deploy/ + terraform/)
+backups/
+
 # git helper files (sync script etc.) — internal, backed up to private snapshot only
 github/
+
+# vmpilot-webui secrets & build artifacts
+vmpilot-webui/.env
+vmpilot-webui/.env.*
+!vmpilot-webui/.env.example
+vmpilot-webui/**/node_modules/
+vmpilot-webui/**/dist/
+vmpilot-webui/nginx/certs/
+vmpilot-webui/config/secrets.env
+vmpilot-webui/data/
+!vmpilot-webui/config/secrets.env.example

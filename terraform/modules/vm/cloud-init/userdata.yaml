@@ -7,6 +7,7 @@
 # ============================================================
 hostname: ${hostname}
 fqdn: ${hostname}.${domain}
+manage_etc_hosts: true
 ssh_authorized_keys:
   - ${ssh_public_key}
 
@@ -18,15 +19,33 @@ users:
     sudo: ALL=(ALL) NOPASSWD:ALL
     groups: [sudo, adm]
     lock_passwd: true
+    shell: /bin/bash
 %{ for u in extra_users ~}
   - name: ${u.username}
-%{ if u.password != "" ~}
-    passwd: ${u.password}
+%{ if u.sudo != "" && u.sudo != "NONE" ~}
+    sudo: ${u.sudo}
 %{ endif ~}
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    groups: [sudo, adm]
+%{ if length(u.groups) > 0 ~}
+    groups: [${join(", ", [for g in u.groups : "\"${g}\""])}]
+%{ endif ~}
+    shell: ${u.shell}
     lock_passwd: false
 %{ endfor ~}
+%{ endif }
+
+%{ if length(extra_users) > 0 }
+%{ if length([for u in extra_users : u if u.password != ""]) > 0 }
+chpasswd:
+  expire: true
+  users:
+%{ for u in extra_users ~}
+%{ if u.password != "" ~}
+    - name: ${u.username}
+      password: ${u.password}
+      type: text
+%{ endif ~}
+%{ endfor ~}
+%{ endif }
 %{ endif }
 
 write_files:
@@ -50,12 +69,38 @@ write_files:
               addresses: ${jsonencode(net.dns_servers)}
 %{ endif ~}
 %{ endfor ~}
+%{ if length(extra_users) > 0 }
+  - path: /etc/vmpilot-access.md
+    content: |
+${indent(6, format("\n%s", access_manifest))}
+    append: false
+    permissions: '0644'
+%{ endif }
+%{ if length(extra_users) > 0 }
+  - path: /etc/sudoers.d/99-vmpilot-audit
+    content: |
+      # VMPilot sudo audit logging — every sudo command is recorded.
+      Defaults  logfile = "/var/log/sudo.log"
+      Defaults  log_year
+      Defaults  loglinelen = 0
+    permissions: '0440'
+%{ endif }
 
 bootcmd:
   - systemctl mask systemd-networkd-wait-online.service 2>/dev/null || true
   - swapoff /swapfile 2>/dev/null || true
   - sed -i '\|/swapfile|d' /etc/fstab 2>/dev/null || true
   - rm -f /swapfile /swap.img 2>/dev/null || true
+%{ if length(extra_users) > 0 }
+%{ if length([for u in extra_users : u if length(u.groups) > 0]) > 0 }
+  # ensure role groups exist before users module runs
+%{ for u in extra_users ~}
+%{ for g in u.groups ~}
+  - groupadd -f ${g}
+%{ endfor ~}
+%{ endfor ~}
+%{ endif }
+%{ endif }
   # DNS wait retry — prevents package install failures
   - |
     for i in 1 2 3 4 5; do

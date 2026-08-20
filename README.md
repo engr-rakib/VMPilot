@@ -213,8 +213,8 @@ Answer a few prompts (vCenter → environment → VM name), and the script does 
 
 - **Smart suggestions** — the moment you pick a vCenter + environment, it auto-loads
   `datacenter`, `cluster`, `datastore`, `resource_pool`, `network`, `template`,
-  `domain`, `gateway`, `netmask`, `dns_servers`, and `ipam_base_ip`. Press Enter to
-  accept, or type your own.
+  `domain`, `gateway`, `netmask`, `dns_servers`, and the per-network IPAM map.
+  Press Enter to accept, or type your own.
 - **Free-IP discovery** — scans the network and picks the next available address.
 - **Compliance warnings** — invalid names, missing credentials, or undersized disks are
   caught immediately, with the exact fix in the message.
@@ -445,21 +445,24 @@ This single command creates everything:
 - `secure/<datacenter>_<server>/vcenter.tfvars` — plaintext inventory
 - `secure/<datacenter>_<server>/{dev,prod,staging}/vcenter.tfvars` — per-env override templates
 
-**Per-environment overrides** — need a different datastore or network in prod only?
+**Per-environment overrides** — need a different datastore/network/resource_pool in prod only?
 
 ```hcl
 # secure/dc_pilot_192.0.2.10/prod/vcenter.tfvars
-datastore = "datastore99"   # ← prod only; everything else inherits the top-level default
+datastores = ["datastore99"]   # ← prod only; dev/staging inherit the top-level default
 ```
 
 - Load order: top-level `vcenter.tfvars` → per-env → **per-env wins per key**
 - Commented/absent keys fall back to the top-level value
-- Allowed keys: `datacenter`, `cluster`, `resource_pool`, `datastore`, `network`, `template`,
-  `domain`, `gateway`, `netmask`, `dns_servers`, `ipam_base_ip`
+- Allowed keys: `datacenter`, `clusters`, `templates`, `datastores`, `networks`,
+  `resource_pools` (OPTIONAL per-env pinning — default is govc auto-discovery at
+  VM-create time), plus network/IPAM: `domain`, `gateway`, `netmask`, `dns_servers`,
+  `network_subnets`, `network_hosts`
 - **Credentials are never per-env** — secrets live only in `secure/<dir>/credentials.tfvars`
 
-> 📖 **Deep dive:** [docs/multi-vcenter.md](docs/multi-vcenter.md) — full multi-vCenter
-> architecture, onboarding wizard, override model, and deploy flow.
+> 📖 **Deep dive:** [docs/vcenter_env_features/README.md](docs/vcenter_env_features/README.md) — full
+> multi-vCenter architecture, onboarding wizard, override model, config layering,
+> policy re-sync, and IPAM/network design.
 
 ---
 

@@ -49,6 +49,8 @@ set -euo pipefail
 # Env vars
 # ───────────────────────────────────────────────────────────────────────────
 #   MAX_ATTEMPTS  — max IPs to try  (default: 20)
+#   RESERVE       — reserved low host-count (gateway + RESERVE IPs below this
+#                   are never handed out; special uses). Default 30.
 #
 # Notes
 # ───────────────────────────────────────────────────────────────────────────
@@ -66,10 +68,25 @@ if ! command -v jq &>/dev/null; then
   exit 1
 fi
 
-INPUT=$(cat < /dev/stdin)
+INPUT=$(cat)
 BASE_IP=$(jq -r '.base_ip' <<< "$INPUT")
 SKIP_IP=$(jq -r '.skip_ip // ""' <<< "$INPUT")
+RANGE_END=$(jq -r '.range_end // ""' <<< "$INPUT")
 MAX_ATTEMPTS=${MAX_ATTEMPTS:-20}
+RESERVE=${RESERVE:-30}
+[ "$RESERVE" -ge 0 ] 2>/dev/null || RESERVE=30
+
+# If range_end given, scan no further than the last IP of the block and never
+# cross the block boundary (e.g. .200 for a /24 deploy range).
+BLOCK_LAST=""
+if [ -n "$RANGE_END" ] && [[ "$RANGE_END" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  BLOCK_LAST="$RANGE_END"
+fi
+MAX_ATTEMPTS=$(if [ -n "$BLOCK_LAST" ]; then
+  IFS='.' read -r _a _b _c _d <<< "$BASE_IP"
+  IFS='.' read -r _e _f _g _h <<< "$BLOCK_LAST"
+  n=$(( (_h - _d) + 1 )); [ "$n" -gt 0 ] && echo "$n" || echo "$MAX_ATTEMPTS"
+else echo "$MAX_ATTEMPTS"; fi)
 
 # ── Reserved IPs = the ip_address values declared in the per-VM config
 # files (deploy/<vcenter>/<env>/vm-*.tfvars, plus legacy deploy/<env>/vm-*.tfvars).
@@ -98,6 +115,21 @@ IFS='.' read -r o1 o2 o3 o4 <<< "$BASE_IP"
 
 for i in $(seq 0 "$MAX_ATTEMPTS"); do
   candidate="$o1.$o2.$o3.$((o4 + i))"
+  # never hand out an IP in the reserved low range (gateway + RESERVE hosts) —
+  # those are for routers/switches/DNS/vCenter/special uses, not VMs. Assumes
+  # gateway = subnet.1 (the standard layout).
+  cand_last=$((o4 + i))
+  if [ "$cand_last" -le "$RESERVE" ]; then
+    continue
+  fi
+  # never hand out an IP past the block's last address (range_end boundary)
+  if [ -n "$BLOCK_LAST" ]; then
+    IFS='.' read -r _l1 _l2 _l3 _l4 <<< "$BLOCK_LAST"
+    if [ "$o1.$o2.$o3" = "$_l1.$_l2.$_l3" ] && [ $((o4 + i)) -gt "$_l4" ]; then
+      echo "{\"error\": \"No free IP found in range $BASE_IP..$BLOCK_LAST\"}"
+      exit 1
+    fi
+  fi
   # Honor a pre-assigned IP (skip_ip / or the VM's own base) — never move a
   # running VM off its configured IP just because it answers ping.
   if [ -n "$SKIP_IP" ] && [ "$candidate" = "$SKIP_IP" ]; then

@@ -55,6 +55,11 @@ variable "template" {
   description = "VM Template Name"
   type        = string
 }
+variable "host" {
+  description = "[DEPRECATED] ESXi host/node to pin the VM to (blank = DRS auto-placement)"
+  type        = string
+  default     = ""
+}
 variable "ssh_public_key" {
   description = "SSH Public Key"
   type        = string
@@ -83,6 +88,7 @@ variable "vm_configs" {
     disk_size  = number
 
     folder                     = optional(string, "")
+    host                       = optional(string, "")
     annotation                 = optional(string, "Managed by Terraform")
     ipam_enabled               = optional(bool, true)
     netmask                    = optional(number, 24)
@@ -135,7 +141,22 @@ variable "vm_configs" {
     extra_users = optional(list(object({
       username = string
       password = optional(string, "")
+      groups   = optional(list(string), [])
     })), [])
+  }))
+  default = {}
+}
+
+# OS access each GROUP grants to extra_users (see secure/<vc>/<env>/user-groups.tfvars).
+# Users are members of groups; permission lives on the group. Policy-loaded by
+# deploy-vm.sh; empty = full-sudo fallback (legacy behaviour).
+variable "user_groups" {
+  description = "Group → OS access policy (os_groups/sudo/shell/description) applied to extra_users"
+  type = map(object({
+    os_groups   = list(string)
+    sudo        = string
+    shell       = string
+    description = optional(string, "")
   }))
   default = {}
 }
