@@ -1,0 +1,65 @@
+name: vmpilot-webui
+
+services:
+  # Node.js backend: auth + web terminal (node-pty) + job API + static frontend.
+  # The ONLY container that talks to the VMPilot CLI (via the mounted repo).
+  # Runs standaloned (serves the UI on WEBUI_PORT) — nginx is optional (profile below).
+  server:
+    build:
+      context: ./server
+    container_name: vmpilot-webui-server
+    restart: unless-stopped
+    # Drop privileges: run as uid 1000 (matches the repo owner on the deploy host).
+    user: "1000:1000"
+    # Server will listen on container port 3000 only; no host port mapping
+    # Ports mapping removed to avoid exposing the Node server on the host.
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+      VMPILOT_DIR: /vmpilot
+      WEBUI_DATA_DIR: /app/data
+      WEBUI_FRONTEND_DIR: /app/frontend
+      TERMINAL_UID: ${TERMINAL_UID:-1000}
+      TERMINAL_GID: ${TERMINAL_GID:-1000}
+      WEBUI_SECRETS_FILE: /run/secrets/webui.env
+      WEBUI_BASE_URL: ${WEBUI_BASE_URL:-}
+    env_file:
+      # Non-secret settings only (WEBUI_USER / WEBUI_SECRET / session hours).
+      # The bcrypt hash must NOT go here — Compose interpolates `$` in .env.
+      - .env
+    volumes:
+      # Runtime-only coupling with the VMPilot repo (no code sharing).
+      - ${VMPILOT_DIR:-../}:/vmpilot
+      # Static frontend (no-build ES modules) — served directly by Node when
+      # nginx is not in use.
+      - ./frontend:/app/frontend:ro
+      # Persistent job log + DB (SQLite).
+      - ./data:/app/data
+      # Literal secrets file (parsed by the app, immune to $ interpolation).
+      - ./config/secrets.env:/run/secrets/webui.env:ro
+    networks:
+      - webui
+
+  # nginx: OPTIONAL. TLS termination + static frontend + rate limiting + WS proxy.
+  # Enable with: docker compose --profile nginx up -d.
+  web:
+    profiles: ["nginx"]
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    container_name: vmpilot-webui-nginx
+    restart: unless-stopped
+    ports:
+      - "${WEBUI_HTTP_PORT:-80}:80"
+      - "${WEBUI_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx/certs:/etc/nginx/certs
+    depends_on:
+      - server
+    networks:
+      - webui
+
+networks:
+  webui:
+    name: vmpilot-webui-net

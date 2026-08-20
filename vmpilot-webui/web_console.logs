@@ -1,0 +1,22 @@
+enable_copy.js:10 enable copy content js called
+enable_copy.js:256 Object
+enable_copy.js:291 E.C.P is not enabled, returning
+react-dom.production.min.js:121 TypeError: c is not a function
+    at If (react-dom.production.min.js:161:274)
+    at Gc (react-dom.production.min.js:164:469)
+    at Xb (react-dom.production.min.js:199:70)
+    at Rk (react-dom.production.min.js:198:114)
+    at xb (react-dom.production.min.js:196:166)
+    at Li (react-dom.production.min.js:189:373)
+    at db (react-dom.production.min.js:79:182)
+    at react-dom.production.min.js:184:289
+wf @ react-dom.production.min.js:121
+react-dom.production.min.js:79 Uncaught TypeError: c is not a function
+    at If (react-dom.production.min.js:161:274)
+    at Gc (react-dom.production.min.js:164:469)
+    at Xb (react-dom.production.min.js:199:70)
+    at Rk (react-dom.production.min.js:198:114)
+    at xb (react-dom.production.min.js:196:166)
+    at Li (react-dom.production.min.js:189:373)
+    at db (react-dom.production.min.js:79:182)
+    at react-dom.production.min.js:184:289

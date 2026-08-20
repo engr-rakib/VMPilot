@@ -1,0 +1,26 @@
+{
+  "name": "vmpilot-webui-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VMPilot WebUI backend - secure terminal + job API (Node.js)",
+  "main": "src/index.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "gen-pass": "node scripts/gen-pass.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cookie-parser": "^1.4.6",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "node-pty": "^1.0.0",
+    "nodemailer": "^6.9.16",
+    "socket.io": "^4.8.0"
+  }
+}

@@ -62,8 +62,19 @@ cleanup() {
 # top-level file: any key actually SET in the override wins; otherwise inherit.
 merge_vcenter() {
   local top="$1" override="$2" out="$3"
-  cp "$top" "$out"
+  # Strip create-time-only map blocks (network_subnets / host_networks /
+  # network_hosts) that the terraform root module does NOT declare — leaving
+  # them in vcenter.auto.tfvars triggers "Value for undeclared variable"
+  # warnings on every plan/apply. Blocks are multi-line (`name = {` … `}`).
+  awk '
+    /^[[:space:]]*(network_subnets|host_networks|network_hosts)[[:space:]]*=/ { inblock=1; next }
+    inblock && /^[[:space:]]*}/ { inblock=0; next }
+    !inblock { print }
+  ' "$top" > "$out"
   [ -f "$override" ] || return 0
+  # ensure the base file ends with a newline so appended override keys can't
+  # jam onto the last line (seen: `ipam_base_ip = "…"networks = […]`)
+  [ -n "$(tail -c 1 "$out")" ] && printf '\n' >> "$out"
   local key line
   while IFS= read -r line; do
     key="$(echo "$line" | sed -E 's/^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*=.*/\1/')"

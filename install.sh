@@ -67,6 +67,7 @@ DEPS_ONLY=false                                     # --deps: dependency phase o
 RUN_INIT=true                                       # --no-init: skip terraform init
 GEN_KEYS=true                                       # --no-keys: skip key generation
 USE_LATEST=false                                    # --latest: auto-detect versions
+DEPLOY_WEBUI="ask"                                  # --webui / --no-webui: force / skip web UI
 
 # ─── helpers (must precede flag parsing / usage) ────────────────────────────
 c_red=$'\e[31m'; c_grn=$'\e[32m'; c_yel=$'\e[33m'; c_cyn=$'\e[36m'; c_bold=$'\e[1m'; c_rst=$'\e[0m'
@@ -88,6 +89,8 @@ Options:
   --deps       Dependencies only — skip clone/base tools (re-run setup on demand)
   --no-keys    Skip generating the SOPS age key and SSH key
   --no-init    Skip running `terraform init`
+  --webui      Also deploy the Docker web console (vmpilot-webui/) — non-interactive
+  --no-webui   Never offer/deploy the web console
   --latest     Fetch latest tool versions at runtime instead of pinned ones
   --help | -h  Show this help
 
@@ -96,6 +99,7 @@ Environment:
   VMPILOT_BRANCH branch to checkout (default: main)
   VMPILOT_DIR    target directory   (default: ~/VMPilot)
   TERRAFORM_VERSION / GOVC_VERSION / SOPS_VERSION  (override pinned versions)
+  WEBUI_PASSWORD password for the web console admin (with --webui)
 EOF
 }
 
@@ -105,6 +109,8 @@ for arg in "$@"; do
     --yes|-y)    INTERACTIVE=false ;;
     --no-keys)   GEN_KEYS=false ;;
     --no-init)   RUN_INIT=false ;;
+    --webui)     DEPLOY_WEBUI=true ;;
+    --no-webui)  DEPLOY_WEBUI=false ;;
     --latest)    USE_LATEST=true ;;
     --help|-h)   usage; exit 0 ;;
     *)           err "Unknown option: $arg"; exit 1 ;;
@@ -189,9 +195,11 @@ next_steps() {
   fi
   echo ""
   info "More help: README.md · secure/README.md · docs/"
+  info "Web console (browser UI): bash vmpilot-webui/scripts/setup.sh && docker compose --profile nginx -f vmpilot-webui/docker-compose.yml up -d --build"
 
   # one-script promise: walk the whole journey now (interactive only)
-  [ "$INTERACTIVE" = true ] && guided_chain
+  if [ "$INTERACTIVE" = true ]; then guided_chain; fi
+  return 0   # never trip `set -e` from the short-circuit above
 }
 
 # ─── interactive guided journey: vCenter → VM config → deploy ──────────────
@@ -238,6 +246,71 @@ guided_chain() {
   else
     info "OK — run it later with: bash scripts/deploy-vm.sh ${vc} ${env} ${name}"
   fi
+
+  # stage D — the web console (browser UI, Docker + nginx). Skipped when the
+  # --webui / --no-webui flags already decide.
+  if [ "$DEPLOY_WEBUI" = "ask" ]; then
+    echo ""
+    read -rp "$(printf '%s (y/N): ' 'Deploy the VMPilot Web UI (browser console)?')" yn
+    if [[ "${yn:-N}" =~ ^[Yy] ]]; then
+      if ! webui_deploy; then warn "Web UI not deployed — see message above."; fi
+    else
+      info "OK — run it later with: bash vmpilot-webui/scripts/setup.sh && docker compose --profile nginx -f vmpilot-webui/docker-compose.yml up -d --build"
+    fi
+  fi
+}
+
+# ─── web UI deployment (vmpilot-webui) — Docker + nginx console ─────────────
+# Called explicitly (--webui) or as the final guided stage. Handles Docker
+# install, secret bootstrap, and compose up. Never prompts when non-interactive.
+require_docker() {
+  have docker || {
+    info "Docker is required for the web console."
+    if confirm "Install Docker now (official get.docker.com script)?"; then
+      curl -fsSL https://get.docker.com | sh
+    else
+      warn "Skipping Docker — run 'vmpilot-webui/scripts/setup.sh' + 'docker compose --profile nginx up' manually later."
+      return 1
+    fi
+  }
+  if ! docker info >/dev/null 2>&1; then
+    if [ "$(id -u)" -ne 0 ] && confirm "Add your user to the docker group (requires re-login)?"; then
+      sudo usermod -aG docker "$USER" && warn "Re-login, then run: bash vmpilot-webui/scripts/setup.sh"
+      return 1
+    fi
+  fi
+}
+
+webui_deploy() {
+  [ -d "vmpilot-webui" ] || die "vmpilot-webui/ not found in ${VMPILOT_DIR}"
+  echo ""
+  info "Deploying the VMPilot Web UI (vmpilot-webui/) ..."
+
+  # graceful skip when Docker is unavailable / declined (already warned inside)
+  require_docker || return 2
+
+  # non-interactive runs get a generated password; interactive users set it themselves
+  if [ "$INTERACTIVE" = true ]; then
+    bash vmpilot-webui/scripts/setup.sh
+  else
+    local pw="${WEBUI_PASSWORD:-}"
+    [ -z "$pw" ] && pw="$(openssl rand -base64 18 | tr -d '\n')"
+    bash vmpilot-webui/scripts/setup.sh "$pw"
+    echo ""
+    warn "Generated admin password (save it, change it later): ${pw}"
+  fi
+
+  # hardened edge: TLS + rate limiting via the nginx profile (matches the
+  # https:// URL below and docker-compose's optional web service).
+  SUDO=""; [ "$(id -u)" -ne 0 ] && ! docker info >/dev/null 2>&1 && SUDO=sudo
+  $SUDO docker compose --profile nginx -f vmpilot-webui/docker-compose.yml up -d --build
+
+  local hport="" suffix=""
+  hport="$(sed -n 's/^WEBUI_HTTPS_PORT=//p' vmpilot-webui/.env 2>/dev/null | tr -d '\r')"
+  [ -n "$hport" ] && [ "$hport" != 443 ] && suffix=":${hport}"
+
+  ok "Web UI deployed."
+  ok "Open it at: https://<this-host>${suffix}/  (self-signed cert; replace under vmpilot-webui/nginx/certs/)"
 }
 
 # ─── 0. environment detection ───────────────────────────────────────────────
@@ -281,7 +354,11 @@ TERRAFORM_INIT_DONE=false
 
 if [ -z "$MISSING_DEPS" ] && [ -f "$AGE_KEY" ] && [ -n "$SSH_PUB" ] && [ "$TERRAFORM_INIT_DONE" = true ]; then
   info "Environment already fully prepared — nothing to install."
-  [ "$DEPS_ONLY" = false ] && next_steps
+  if [ "$DEPS_ONLY" = false ]; then next_steps; fi
+  # explicit --webui still deploys the console even when the CLI env is ready
+  if [ "$DEPS_ONLY" = false ] && [ "$DEPLOY_WEBUI" = true ]; then
+    if ! webui_deploy; then warn "Web UI not deployed — see message above."; fi
+  fi
   exit 0
 else
   [ -n "$MISSING_DEPS" ] && warn "Missing tools:${MISSING_DEPS}"
@@ -454,4 +531,10 @@ ok "Setup complete."
 
 if [ "$DEPS_ONLY" = false ]; then
   next_steps
+fi
+
+# explicit --webui: deploy the web console now (idempotent; interactive runs
+# were already offered inside guided_chain).
+if [ "$DEPS_ONLY" = false ] && [ "$DEPLOY_WEBUI" = true ]; then
+  if ! webui_deploy; then warn "Web UI not deployed — see message above."; fi
 fi

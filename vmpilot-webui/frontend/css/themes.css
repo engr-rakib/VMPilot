@@ -1,0 +1,224 @@
+/* themes.css — design tokens, reset, base, scrollbars */
+:root {
+  --bg: #0b0f14;
+  --panel: #11161d;
+  --panel2: #141b24;
+  --border: #1f2a37;
+  --border2: #2a3a4d;
+  --text: #d4d8dd;
+  --muted: #8a94a1;
+  --accent: #22d3ee;
+  --accent2: #2563eb;
+  --danger: #f87171;
+  --ok: #4ade80;
+  --warn: #fbbf24;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+}
+
+.center {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.spinner.inline { display: inline-block; width: 12px; height: 12px; margin-right: 8px; vertical-align: -2px; }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.muted { color: var(--muted); font-size: 12px; }
+
+.error { color: var(--danger); font-size: 13px; margin: 0; text-align: center; }
+
+.ok { color: var(--ok); font-size: 13px; }
+
+.row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+.pill {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 99px;
+  font-size: 11px;
+  background: #1b2530;
+  color: var(--muted);
+}
+.pill.ok { color: var(--ok); background: rgba(74, 222, 128, 0.12); }
+.pill.off { color: var(--danger); background: rgba(248, 113, 113, 0.12); }
+.pill.pending { color: var(--warn); background: rgba(251, 191, 36, 0.12); }
+.pill.env { color: var(--accent); background: rgba(34, 211, 238, 0.1); }
+.pill.crit { color: var(--danger); background: rgba(248, 113, 113, 0.16); }
+.pill.warn { color: var(--warn); background: rgba(251, 191, 36, 0.16); }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  margin-bottom: 14px;
+}
+
+.card h3 { margin: 0 0 10px; font-size: 14px; }
+.card h3.clickable { cursor: pointer; }
+.card h3.clickable:hover { color: var(--accent); }
+
+button.ghost {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 4px 11px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+button.ghost:hover { color: var(--text); border-color: var(--muted); }
+button.ghost:disabled { opacity: 0.5; cursor: default; }
+button.ghost.danger:hover { color: var(--danger); border-color: var(--danger); }
+
+button.primary {
+  padding: 9px 16px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #0891b2, #2563eb);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button.primary:disabled { opacity: 0.6; cursor: default; }
+button.primary.sm {
+  padding: 5px 12px;
+  font-size: 12px;
+  border-radius: 6px;
+  font-weight: 600;
+}
+
+.mini {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  border-radius: 5px;
+  cursor: pointer;
+  padding: 1px 7px;
+}
+.mini:hover { color: var(--accent); border-color: var(--accent); }
+.mini.ok { color: var(--ok); border-color: var(--ok); }
+.mini.ok:hover { color: var(--bg); background: var(--ok); }
+
+/* ---- tables ---- */
+.mini-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mini-table th, .mini-table td {
+  text-align: left;
+  padding: 7px 9px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.mini-table th { color: var(--muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.mini-table tbody tr:hover { background: rgba(255, 255, 255, 0.025); }
+.mini-table tbody tr { cursor: pointer; }
+
+table.vms { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.vms th, table.vms td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+table.vms th { color: var(--muted); font-weight: 500; font-size: 12px; }
+
+/* scrollbars — match the dark navy theme */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #2a3a4d;
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: #3d5266; background-clip: padding-box; }
+::-webkit-scrollbar-corner { background: transparent; }
+* { scrollbar-width: thin; scrollbar-color: #2a3a4d transparent; }
+
+/* ── custom tooltips (VS Code style) ─────────────────────────────────── */
+[data-tip] { position: relative; }
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3000;
+  background: #141b24;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.5;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: normal;
+  max-width: 280px;
+  width: max-content;
+  padding: 6px 9px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+  animation: tip-in 0.12s ease-out;
+}
+[data-tip]:hover::before,
+[data-tip]:focus-visible::before {
+  content: "";
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3000;
+  border: 6px solid transparent;
+  border-bottom-color: var(--border2);
+  pointer-events: none;
+}
+@keyframes tip-in { from { opacity: 0; transform: translate(-50%, -3px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* right-edge tooltips: anchor to the right so they never overflow the viewport */
+.shell-top-right [data-tip]:hover::after,
+.shell-top-right [data-tip]:focus-visible::after,
+.explorer-actions [data-tip]:hover::after,
+.explorer-actions [data-tip]:focus-visible::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+.shell-top-right [data-tip]:hover::before,
+.shell-top-right [data-tip]:focus-visible::before,
+.explorer-actions [data-tip]:hover::before,
+.explorer-actions [data-tip]:focus-visible::before {
+  left: auto;
+  right: 10px;
+  transform: none;
+}
+.shell-top-right [data-tip]:hover::after,
+.shell-top-right [data-tip]:focus-visible::after,
+.explorer-actions [data-tip]:hover::after,
+.explorer-actions [data-tip]:focus-visible::after { animation: tip-in-right 0.12s ease-out; }
+@keyframes tip-in-right { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }

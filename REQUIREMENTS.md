@@ -65,7 +65,7 @@ the same on Ubuntu, Debian, RHEL/CentOS, or any other Linux distro.
 | **A datastore** | With enough free space for OS + data disks |
 | **A distributed/standard port group (network)** | The VLAN that VMs join (static IP) |
 | **DNS servers + a gateway + a domain** | Static network config applied to every VM |
-| **A block of free IPs** | `ipam_base_ip` = first IP the free-IP scanner tries |
+| **A block of free IPs** | per-network `ipam_base` in `network_subnets` = first IP the free-IP scanner tries |
 
 ### 2.3 Every New VM (inside the guest)
 
@@ -288,7 +288,7 @@ New to all of this? Follow exactly this order.
 | `bash install.sh` fails / `command not found` | Ran from the wrong directory | `cd <project-root>` first, or use the one-liner: `curl -fsSL …/install.sh \| bash` |
 | `no matching creation rules found` (sops) | Plaintext was outside the project | Put plaintext in `.tmp-sops-plain/` (project root) before encrypting |
 | `Encrypted files not found` | `secure/<dir>/credentials.tfvars` missing | `bash scripts/vcenter-setup.sh` |
-| `Could not auto-find free IP` | Port-group subnet unreachable / all IPs used | Widen `ipam_base_ip` or free an IP |
+| `Could not auto-find free IP` | Port-group subnet unreachable / all IPs used | Widen the network's `ipam_base`/`range_end` or free an IP |
 | `No vCenter configured yet` | No `deploy/*/` vCenter dirs | Run `vcenter-setup.sh` first |
 | `Duplicate IPs` error | Two VMs configured with the same IP | Fix one config's `ip_address` |
 | Terraform can't reach vCenter | Firewall / wrong creds | Test `govc ls` after `vcenter-setup.sh` |

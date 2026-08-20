@@ -1,0 +1,202 @@
+root@terraform:/opt/terraform-lab/projects/VMPilot# bash scripts/deploy-vm.sh datacenter_pilot_192.168.100.103 prod myvm
+================================================================================
+  VMPilot  -  VMware vSphere Automation
+  (c) 2026 Rakibuzzaman (Engr. Rakib)  -  Original author
+  GitHub: https://github.com/engr-rakib   |   Web: https://engr-rakib.github.io/web
+================================================================================
+:: VM config: /opt/terraform-lab/projects/VMPilot/deploy/datacenter_pilot_192.168.100.103/prod/vm-myvm_192.168.1.171.tfvars
+
+⚠ vm-myvm config is out of policy (secure/datacenter_pilot_192.168.100.103/prod/vcenter.tfvars):
+    datastore: datastore74 → Datastore169
+✓ Policy applied → vm-myvm_192.168.1.171.tfvars (VM-owned keys untouched)
+
+:: Combined config: 2 VM entry/ies (vcenter 'datacenter_pilot_192.168.100.103', env 'prod', own state)
+:: VMs in combined config:
+  datacenter_pilot_192.168.100.103/prod: accesspilot_prod,myvm
+  --> targeting ONLY: myvm
+================================================================================
+  VMPilot  -  VMware vSphere Automation
+  (c) 2026 Rakibuzzaman (Engr. Rakib)  -  Original author
+  GitHub: https://github.com/engr-rakib   |   Web: https://engr-rakib.github.io/web
+================================================================================
+Decrypting secure/datacenter_pilot_192.168.100.103/*.tfvars → terraform/*.auto.tfvars ...
+Merged per-env override: secure/datacenter_pilot_192.168.100.103/prod/vcenter.tfvars (keys there win)
+Done.
+
+WARNING: Decrypted credentials on disk: terraform/*.auto.tfvars
+Run cleanup after apply:  bash sops-decrypt.sh datacenter_pilot_192.168.100.103 prod --clean
+Or auto-clean:            bash sops-decrypt.sh datacenter_pilot_192.168.100.103 prod --apply -- [terraform flags]
+:: State file: terraform/terraform.datacenter_pilot_192.168.100.103.prod.tfstate
+:: Applying: myvm
+╷
+│ Warning: Deprecated flag: -state
+│ 
+│ Use the "path" attribute within the "local" backend to specify a file for state storage
+╵
+data.vsphere_datacenter.dc: Reading...
+data.vsphere_datacenter.dc: Read complete after 0s [id=datacenter-3]
+data.vsphere_datastore.datastore: Reading...
+data.vsphere_virtual_machine.template: Reading...
+data.vsphere_compute_cluster.cluster: Reading...
+data.vsphere_network.network: Reading...
+data.vsphere_host.host["myvm"]: Reading...
+data.vsphere_network.network: Read complete after 1s [id=network-22]
+data.vsphere_datastore.datastore: Read complete after 1s [id=datastore-21]
+data.vsphere_compute_cluster.cluster: Read complete after 1s [id=domain-c62]
+data.vsphere_host.host["myvm"]: Read complete after 1s [id=host-12]
+data.vsphere_virtual_machine.template: Read complete after 1s [id=421b153a-1cdc-0fa4-0fba-e80202a46d27]
+
+Terraform used the selected providers to generate the following execution plan. Resource actions are indicated with the following symbols:
+  + create
+
+Terraform will perform the following actions:
+
+  # module.vm["myvm"].vsphere_virtual_machine.this will be created
+  + resource "vsphere_virtual_machine" "this" {
+      + annotation                              = "myvm Server"
+      + boot_retry_delay                        = 10000
+      + change_version                          = (known after apply)
+      + cpu_hot_add_enabled                     = true
+      + cpu_limit                               = -1
+      + cpu_share_count                         = (known after apply)
+      + cpu_share_level                         = "normal"
+      + datastore_id                            = "datastore-21"
+      + default_ip_address                      = (known after apply)
+      + ept_rvi_mode                            = (known after apply)
+      + extra_config                            = {
+          + "guestinfo.metadata"          = "I2Nsb3VkLWNvbmZpZwojID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIFZNUGlsb3QgIChjKSAyMDI2IFJha2lidXp6YW1hbiAoRW5nci4gUmFraWIpCiMgT3JpZ2luYWwgYXV0aG9yIC0gZG8gbm90IHJlbW92ZSB0aGlzIGF0dHJpYnV0aW9uLgojIEdpdEh1YjogaHR0cHM6Ly9naXRodWIuY29tL2VuZ3ItcmFraWIKIyBXZWI6ICAgIGh0dHBzOi8vZW5nci1yYWtpYi5naXRodWIuaW8vd2ViCiMgPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09Cmluc3RhbmNlLWlkOiBteXZtCmxvY2FsLWhvc3RuYW1lOiBteXZtCg=="
+          + "guestinfo.metadata.encoding" = "base64"
+          + "guestinfo.userdata"          = "I2Nsb3VkLWNvbmZpZwojID09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PQojIFZNUGlsb3QgIChjKSAyMDI2IFJha2lidXp6YW1hbiAoRW5nci4gUmFraWIpCiMgT3JpZ2luYWwgYXV0aG9yIC0gZG8gbm90IHJlbW92ZSB0aGlzIGF0dHJpYnV0aW9uLgojIEdpdEh1YjogaHR0cHM6Ly9naXRodWIuY29tL2VuZ3ItcmFraWIKIyBXZWI6ICAgIGh0dHBzOi8vZW5nci1yYWtpYi5naXRodWIuaW8vd2ViCiMgPT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09PT09Cmhvc3RuYW1lOiBteXZtCmZxZG46IG15dm0uYWNjZXNzcGlsb3QubG9jYWwKc3NoX2F1dGhvcml6ZWRfa2V5czoKICAtIHNzaC1lZDI1NTE5IEFBQUFDM056YUMxbFpESTFOVEU1QUFBQUlDYTN4UHV2cjhtbGZQWnRSYnpXdkptdlhGSC94Y1l5c3dBa21aOTBmejF4IHRlcnJhZm9ybQoKCnVzZXJzOgogIC0gbmFtZTogdWJ1bnR1CiAgICBzc2hfYXV0aG9yaXplZF9rZXlzOgogICAgICAtIHNzaC1lZDI1NTE5IEFBQUFDM056YUMxbFpESTFOVEU1QUFBQUlDYTN4UHV2cjhtbGZQWnRSYnpXdkptdlhGSC94Y1l5c3dBa21aOTBmejF4IHRlcnJhZm9ybQogICAgc3VkbzogQUxMPShBTEwpIE5PUEFTU1dEOkFMTAogICAgZ3JvdXBzOiBbc3VkbywgYWRtXQogICAgbG9ja19wYXNzd2Q6IHRydWUKICAtIG5hbWU6IGFkbWluMQogICAgc3VkbzogQUxMPShBTEwpIE5PUEFTU1dEOkFMTAogICAgZ3JvdXBzOiBbc3VkbywgYWRtXQogICAgbG9ja19wYXNzd2Q6IGZhbHNlCgoKd3JpdGVfZmlsZXM6CiAgLSBwYXRoOiAvZXRjL25ldHBsYW4vMDEtc3RhdGljLnlhbWwKICAgIGNvbnRlbnQ6IHwKICAgICAgbmV0d29yazoKICAgICAgICB2ZXJzaW9uOiAyCiAgICAgICAgcmVuZGVyZXI6IG5ldHdvcmtkCiAgICAgICAgZXRoZXJuZXRzOgogICAgICAgICAgZW5zMTkyOgogICAgICAgICAgICBkaGNwNDogZmFsc2UKICAgICAgICAgICAgYWRkcmVzc2VzOgogICAgICAgICAgICAgIC0gMTkyLjE2OC4xLjE3MS8yNAogICAgICAgICAgICByb3V0ZXM6CiAgICAgICAgICAgICAgLSB0bzogZGVmYXVsdAogICAgICAgICAgICAgICAgdmlhOiAxOTIuMTY4LjEuMQogICAgICAgICAgICAgICAgbWV0cmljOiAxMDAKICAgICAgICAgICAgbmFtZXNlcnZlcnM6CiAgICAgICAgICAgICAgYWRkcmVzc2VzOiBbIjE5Mi4xNjguMTE5LjE2OSIsIjE5Mi4xNjguMTE5LjE3MCJdCgpib290Y21kOgogIC0gc3lzdGVtY3RsIG1hc2sgc3lzdGVtZC1uZXR3b3JrZC13YWl0LW9ubGluZS5zZXJ2aWNlIDI+L2Rldi9udWxsIHx8IHRydWUKICAtIHN3YXBvZmYgL3N3YXBmaWxlIDI+L2Rldi9udWxsIHx8IHRydWUKICAtIHNlZCAtaSAnXHwvc3dhcGZpbGV8ZCcgL2V0Yy9mc3RhYiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgLSBybSAtZiAvc3dhcGZpbGUgL3N3YXAuaW1nIDI+L2Rldi9udWxsIHx8IHRydWUKICAjIEROUyB3YWl0IHJldHJ5IOKAlCBwcmV2ZW50cyBwYWNrYWdlIGluc3RhbGwgZmFpbHVyZXMKICAtIHwKICAgIGZvciBpIGluIDEgMiAzIDQgNTsgZG8KICAgICAgcGluZyAtYzEgLVcyIGFyY2hpdmUudWJ1bnR1LmNvbSA+L2Rldi9udWxsIDI+JjEgJiYgYnJlYWsKICAgICAgc2xlZXAgNQogICAgZG9uZQoKICAtIHN5c3RlbWN0bCBkaXNhYmxlIC0tbm93IGFwdC1kYWlseS5zZXJ2aWNlIGFwdC1kYWlseS11cGdyYWRlLnNlcnZpY2UgYXB0LWRhaWx5LnRpbWVyIGFwdC1kYWlseS11cGdyYWRlLnRpbWVyIHVuYXR0ZW5kZWQtdXBncmFkZXMuc2VydmljZSAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgLSBzeXN0ZW1jdGwgbWFzayBhcHQtZGFpbHkuc2VydmljZSBhcHQtZGFpbHktdXBncmFkZS5zZXJ2aWNlIGFwdC1kYWlseS50aW1lciBhcHQtZGFpbHktdXBncmFkZS50aW1lciB1bmF0dGVuZGVkLXVwZ3JhZGVzLnNlcnZpY2UgMj4vZGV2L251bGwgfHwgdHJ1ZQoKCmdyb3dwYXJ0OgogIG1vZGU6IGF1dG8KICBkZXZpY2VzOiBbIi8iXQogIGlnbm9yZV9ncm93cm9vdF9kaXNhYmxlZDogZmFsc2UKCnJlc2l6ZV9yb290ZnM6IHRydWUKCgpwYWNrYWdlczoKCiAgLSBsdm0yCiAgLSBjbG91ZC1ndWVzdC11dGlscwoKCgpydW5jbWQ6CiAgLSBuZXRwbGFuIGFwcGx5CgogIC0gfAogICAgZ3Jvd3BhcnQgL2Rldi9zZGEgMiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICBwdnJlc2l6ZSAvZGV2L3NkYTIKCiAgICBsdmV4dGVuZCAtTCAxMEcgL2Rldi92Z19vcy9sdl9yb290CiAgICByZXNpemUyZnMgL2Rldi92Z19vcy9sdl9yb290CgoKCiAgICBpZiAhIGx2cyAvZGV2L3ZnX29zL2x2X2hvbWUgJj4vZGV2L251bGw7IHRoZW4KICAgICAgbHZjcmVhdGUgLUwgMkcgLW4gbHZfaG9tZSB2Z19vcwogICAgZWxzZQogICAgICBlY2hvICJMViBsdl9ob21lIGFscmVhZHkgZXhpc3RzLCBza2lwcGluZyIKICAgIGZpCiAgICBta2ZzLnhmcyAvZGV2L3ZnX29zL2x2X2hvbWUKICAgIE9SSUdfUEVSTVM9JChzdGF0IC1jICIlYSIgL2hvbWUgMj4vZGV2L251bGwgfHwgZWNobyAiNzU1IikKICAgIFRNUF9NTlQ9Ii9tbnQvdG1wX2x2X2hvbWUiCiAgICBta2RpciAtcCAiJFRNUF9NTlQiCiAgICBtb3VudCAvZGV2L3ZnX29zL2x2X2hvbWUgIiRUTVBfTU5UIgogICAgY3AgLWEgL2hvbWUvLiAiJFRNUF9NTlQvIiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICB1bW91bnQgIiRUTVBfTU5UIgogICAgcm1kaXIgIiRUTVBfTU5UIiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICBta2RpciAtcCAvaG9tZQogICAgbW91bnQgL2Rldi92Z19vcy9sdl9ob21lIC9ob21lCiAgICBjaG1vZCAiJE9SSUdfUEVSTVMiIC9ob21lCiAgICBlY2hvICcvZGV2L3ZnX29zL2x2X2hvbWUgL2hvbWUgeGZzIGRlZmF1bHRzIDAgMicgPj4gL2V0Yy9mc3RhYgoKCgoKICAgIGlmICEgbHZzIC9kZXYvdmdfb3MvbHZfdmFyICY+L2Rldi9udWxsOyB0aGVuCiAgICAgIGx2Y3JlYXRlIC1MIDhHIC1uIGx2X3ZhciB2Z19vcwogICAgZWxzZQogICAgICBlY2hvICJMViBsdl92YXIgYWxyZWFkeSBleGlzdHMsIHNraXBwaW5nIgogICAgZmkKICAgIG1rZnMueGZzIC9kZXYvdmdfb3MvbHZfdmFyCiAgICBPUklHX1BFUk1TPSQoc3RhdCAtYyAiJWEiIC92YXIgMj4vZGV2L251bGwgfHwgZWNobyAiNzU1IikKICAgIFRNUF9NTlQ9Ii9tbnQvdG1wX2x2X3ZhciIKICAgIG1rZGlyIC1wICIkVE1QX01OVCIKICAgIG1vdW50IC9kZXYvdmdfb3MvbHZfdmFyICIkVE1QX01OVCIKICAgIGNwIC1hIC92YXIvLiAiJFRNUF9NTlQvIiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICB1bW91bnQgIiRUTVBfTU5UIgogICAgcm1kaXIgIiRUTVBfTU5UIiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICBta2RpciAtcCAvdmFyCiAgICBtb3VudCAvZGV2L3ZnX29zL2x2X3ZhciAvdmFyCiAgICBjaG1vZCAiJE9SSUdfUEVSTVMiIC92YXIKICAgIGVjaG8gJy9kZXYvdmdfb3MvbHZfdmFyIC92YXIgeGZzIGRlZmF1bHRzIDAgMicgPj4gL2V0Yy9mc3RhYgoKCgoKICAgIGlmICEgbHZzIC9kZXYvdmdfb3MvbHZfdG1wICY+L2Rldi9udWxsOyB0aGVuCiAgICAgIGx2Y3JlYXRlIC1MIDFHIC1uIGx2X3RtcCB2Z19vcwogICAgZWxzZQogICAgICBlY2hvICJMViBsdl90bXAgYWxyZWFkeSBleGlzdHMsIHNraXBwaW5nIgogICAgZmkKICAgIG1rZnMueGZzIC9kZXYvdmdfb3MvbHZfdG1wCiAgICBPUklHX1BFUk1TPSQoc3RhdCAtYyAiJWEiIC90bXAgMj4vZGV2L251bGwgfHwgZWNobyAiNzU1IikKICAgIFRNUF9NTlQ9Ii9tbnQvdG1wX2x2X3RtcCIKICAgIG1rZGlyIC1wICIkVE1QX01OVCIKICAgIG1vdW50IC9kZXYvdmdfb3MvbHZfdG1wICIkVE1QX01OVCIKICAgIGNwIC1hIC90bXAvLiAiJFRNUF9NTlQvIiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICB1bW91bnQgIiRUTVBfTU5UIgogICAgcm1kaXIgIiRUTVBfTU5UIiAyPi9kZXYvbnVsbCB8fCB0cnVlCiAgICBta2RpciAtcCAvdG1wCiAgICBtb3VudCAvZGV2L3ZnX29zL2x2X3RtcCAvdG1wCiAgICBjaG1vZCAiJE9SSUdfUEVSTVMiIC90bXAKICAgIGVjaG8gJy9kZXYvdmdfb3MvbHZfdG1wIC90bXAgeGZzIGRlZmF1bHRzIDAgMicgPj4gL2V0Yy9mc3RhYgoKCgoKICAtIHwKICAgIGlmIFsgISAtZiAvc3dhcGZpbGUgXTsgdGhlbgogICAgICBmYWxsb2NhdGUgLWwgMzA3Mk0gL3N3YXBmaWxlIDI+L2Rldi9udWxsIHx8IGRkIGlmPS9kZXYvemVybyBvZj0vc3dhcGZpbGUgYnM9MU0gY291bnQ9MzA3MgogICAgICBjaG1vZCA2MDAgL3N3YXBmaWxlCiAgICAgIG1rc3dhcCAvc3dhcGZpbGUKICAgICAgc3dhcG9uIC9zd2FwZmlsZQogICAgICBlY2hvICcvc3dhcGZpbGUgbm9uZSBzd2FwIHN3IDAgMCcgPj4gL2V0Yy9mc3RhYgogICAgZmkKCgoKCiAgIyBFeHRyYSB1c2VycyBjcmVhdGVkIHZpYSBjbG91ZC1pbml0IHVzZXJzIG1vZHVsZSBhYm92ZSDigJQgbm8gcnVuY21kIG5lZWRlZAoKCgo="
+          + "guestinfo.userdata.encoding" = "base64"
+        }
+      + extra_config_reboot_required            = true
+      + firmware                                = "efi"
+      + force_power_off                         = true
+      + guest_id                                = "ubuntu64Guest"
+      + guest_ip_addresses                      = (known after apply)
+      + hardware_version                        = (known after apply)
+      + host_system_id                          = "host-12"
+      + hv_mode                                 = (known after apply)
+      + id                                      = (known after apply)
+      + ide_controller_count                    = 2
+      + imported                                = (known after apply)
+      + latency_sensitivity                     = "normal"
+      + memory                                  = 2048
+      + memory_hot_add_enabled                  = true
+      + memory_limit                            = -1
+      + memory_share_count                      = (known after apply)
+      + memory_share_level                      = "normal"
+      + migrate_wait_timeout                    = 30
+      + moid                                    = (known after apply)
+      + name                                    = "myvm"
+      + num_cores_per_socket                    = 1
+      + num_cpus                                = 2
+      + nvme_controller_count                   = 0
+      + power_state                             = (known after apply)
+      + poweron_timeout                         = 300
+      + reboot_required                         = (known after apply)
+      + resource_pool_id                        = "resgroup-63"
+      + run_tools_scripts_after_power_on        = true
+      + run_tools_scripts_after_resume          = true
+      + run_tools_scripts_before_guest_shutdown = true
+      + run_tools_scripts_before_guest_standby  = true
+      + sata_controller_count                   = 0
+      + scsi_bus_sharing                        = "noSharing"
+      + scsi_controller_count                   = 1
+      + scsi_type                               = "lsilogic-sas"
+      + shutdown_wait_timeout                   = 3
+      + storage_policy_id                       = (known after apply)
+      + swap_placement_policy                   = "inherit"
+      + sync_time_with_host                     = true
+      + tools_upgrade_policy                    = "manual"
+      + uuid                                    = (known after apply)
+      + vapp_transport                          = (known after apply)
+      + vmware_tools_status                     = (known after apply)
+      + vmx_path                                = (known after apply)
+      + wait_for_guest_ip_timeout               = 0
+      + wait_for_guest_net_routable             = true
+      + wait_for_guest_net_timeout              = 0
+        # (1 unchanged attribute hidden)
+
+      + clone {
+          + template_uuid = "421b153a-1cdc-0fa4-0fba-e80202a46d27"
+          + timeout       = 30
+        }
+
+      + disk {
+          + attach            = false
+          + controller_type   = "scsi"
+          + datastore_id      = "<computed>"
+          + device_address    = (known after apply)
+          + disk_mode         = "persistent"
+          + disk_sharing      = "sharingNone"
+          + eagerly_scrub     = false
+          + io_limit          = -1
+          + io_reservation    = 0
+          + io_share_count    = 0
+          + io_share_level    = "normal"
+          + keep_on_remove    = false
+          + key               = 0
+          + label             = "os-disk"
+          + path              = (known after apply)
+          + size              = 40
+          + storage_policy_id = (known after apply)
+          + thin_provisioned  = true
+          + unit_number       = 0
+          + uuid              = (known after apply)
+          + write_through     = false
+        }
+
+      + network_interface {
+          + adapter_type          = "vmxnet3"
+          + bandwidth_limit       = -1
+          + bandwidth_reservation = 0
+          + bandwidth_share_count = (known after apply)
+          + bandwidth_share_level = "normal"
+          + device_address        = (known after apply)
+          + external_port_id      = (known after apply)
+          + key                   = (known after apply)
+          + mac_address           = (known after apply)
+          + network_id            = "network-22"
+        }
+    }
+
+Plan: 1 to add, 0 to change, 0 to destroy.
+
+Changes to Outputs:
+  ~ cloud_init_status = {
+      + accesspilot_prod = (known after apply)
+      ~ myvm             = "IP not yet assigned — run later: terraform output cloud_init_status" -> (known after apply)
+    }
+  ~ datastore         = "datastore74" -> "Datastore169"
+  ~ vm_ip_addresses   = {
+      + accesspilot_prod = (known after apply)
+      + myvm             = (known after apply)
+    }
+  ~ vm_names          = [
+      + (known after apply),
+        "myvm",
+    ]
+  ~ vms               = {
+      ~ accesspilot_prod = {
+          + cpu        = (known after apply)
+          + guest_os   = (known after apply)
+          + ip_address = (known after apply)
+          + memory     = (known after apply)
+          + name       = (known after apply)
+          + uuid       = (known after apply)
+        }
+      ~ myvm             = {
+          + ip_address = (known after apply)
+            name       = "myvm"
+          ~ uuid       = "421b1fc9-6392-0b91-e509-569bda3c147c" -> (known after apply)
+            # (3 unchanged attributes hidden)
+        }
+    }
+module.vm["myvm"].vsphere_virtual_machine.this: Creating...
+module.vm["myvm"].vsphere_virtual_machine.this: Still creating... [00m10s elapsed]
+module.vm["myvm"].vsphere_virtual_machine.this: Still creating... [00m20s elapsed]
+module.vm["myvm"].vsphere_virtual_machine.this: Still creating... [00m30s elapsed]
+module.vm["myvm"].vsphere_virtual_machine.this: Still creating... [00m40s elapsed]
+module.vm["myvm"].vsphere_virtual_machine.this: Still creating... [00m50s elapsed]
+module.vm["myvm"].vsphere_virtual_machine.this: Still creating... [01m00s elapsed]

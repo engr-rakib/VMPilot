@@ -44,7 +44,7 @@ secure/
 bash install.sh          # installs sops, terraform, govc, age (creates age + ssh keys)
 ```
 - age private key at `~/.config/sops/age/keys.txt` (SOPS uses it to decrypt)
-- `scripts/vm-defaults.conf` optionally tweaks the defaults proposed by the wizard
+- `secure/<vcenter>/vm-defaults.conf` (per-vCenter) optionally tweaks the defaults the wizard proposes — auto-created when a vCenter is onboarded
 
 ### Step 1 — Onboard your vCenter (one command)
 
@@ -82,7 +82,7 @@ differs, open **that env's child file** and uncomment + set the key:
 
 ```bash
 # secure/<datacenter>_<server>/prod/vcenter.tfvars   ← PROD child
-datastore = "datastore99"     # ← prod only; dev/staging keep datastore01
+datastores = ["datastore99"]       # ← prod only; dev/staging keep the parent datastore
 ```
 
 **The rule — child wins, parent is never modified:**
@@ -91,8 +91,9 @@ datastore = "datastore99"     # ← prod only; dev/staging keep datastore01
 - The parent file is **read-only at merge time** — editing a child **never overwrites** it
 - `credentials` are **never** per-env — secrets stay only in `credentials.tfvars`
 
-Allowed override keys: `datacenter`, `cluster`, `resource_pool`, `datastore`, `network`,
-`template`, `domain`, `gateway`, `netmask`, `dns_servers`, `ipam_base_ip`.
+Allowed override keys: `datacenter`, `clusters`, `templates`, `datastores`, `networks`,
+`resource_pools` (OPTIONAL per-env pinning — default is govc auto-discovery at VM-create
+time), plus network/IPAM: `domain`, `gateway`, `netmask`, `dns_servers`, `ipam_base_ip`.
 
 ### Step 3 — Create a VM config (auto-stored in the pre-structured dir)
 

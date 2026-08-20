@@ -22,6 +22,7 @@ locals {
   single_vm_config = {
     (var.vm_name != "" ? var.vm_name : "default") = {
       hostname                   = var.hostname
+      host                       = var.host
       ip_address                 = var.ip_address
       gateway                    = var.gateway
       cpu                        = var.cpu
@@ -131,6 +132,7 @@ module "vm" {
   template_id        = data.vsphere_virtual_machine.template.id
   template_guest_id  = data.vsphere_virtual_machine.template.guest_id
   template_scsi_type = data.vsphere_virtual_machine.template.scsi_type
+  host_system_id     = each.value.host != "" ? data.vsphere_host.host[each.key].id : null
 
   networks = local.vm_networks[each.key].all
 
@@ -152,6 +154,7 @@ module "vm" {
   lvm_config    = each.value.lvm_config
   mount_points  = each.value.mount_points
   extra_users   = each.value.extra_users
+  user_groups   = var.user_groups
 
   disable_auto_updates = each.value.disable_auto_updates
   enable_node_exporter = each.value.enable_node_exporter

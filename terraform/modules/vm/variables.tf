@@ -22,6 +22,11 @@ variable "datastore_id" { type = string }
 variable "template_id" { type = string }
 variable "template_guest_id" { type = string }
 variable "template_scsi_type" { type = string }
+variable "host_system_id" {
+  description = "ESXi host to pin the VM to (null = DRS auto-placement)"
+  type        = string
+  default     = null
+}
 
 variable "wait_for_guest_net_timeout" {
   description = "Seconds to wait for VM IP. 0 = skip wait entirely."
@@ -140,12 +145,24 @@ variable "mount_points" {
 }
 
 variable "extra_users" {
-  description = "Additional OS users (created via cloud-init runcmd)"
+  description = "Additional OS users (created via cloud-init users module)"
   type = list(object({
     username = string
     password = optional(string, "")
+    groups   = optional(list(string), [])
   }))
   default = []
+}
+
+variable "user_groups" {
+  description = "Group → OS access policy (os_groups/sudo/shell/description). Loaded from secure/<vc>/<env>/user-groups.tfvars"
+  type = map(object({
+    os_groups   = list(string)
+    sudo        = string
+    shell       = string
+    description = optional(string, "")
+  }))
+  default = {}
 }
 
 variable "disable_auto_updates" {
