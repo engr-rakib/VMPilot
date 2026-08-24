@@ -438,7 +438,8 @@ live)
          diskUsedGB:((.summary.storage.committed // 0)/1024/1024/1024),
          diskUnsharedGB:((.summary.storage.unshared // 0)/1024/1024/1024),
          netKBps:($netmap[(.self.value // "")] // 0),
-         diskKBps:($diskmapper[(.self.value // "")] // 0)}
+         diskKBps:($diskmapper[(.self.value // "")] // 0),
+         hostMoid:(.runtime.host.value // null)}
       ]' <<<"$info")
       printf '%s\n' "$out"
       mkdir -p "${ROOT_DIR}/.cache"
@@ -557,14 +558,14 @@ live)
         _diskKB=$(awk -F'|' '{print $2}' <<<"$_io")
         [ -n "$_netKB" ] || _netKB=0
         [ -n "$_diskKB" ] || _diskKB=0
-        H_ROWS+=("$(jq -cn --arg name "$hname" --arg ip "$hips" \
+        H_ROWS+=("$(jq -cn --arg name "$hname" --arg ip "$hips" --arg id "$_moid" \
           --argjson cores "$_cores" --argjson mhz "$_mhz" \
           --argjson memBytes "$_memb" --argjson cpuUsageMHz "$_cpusg" --argjson memUsageMB "$_memsg" \
           --arg powerState "$_pw" --arg connectionState "$_conn" --arg overallStatus "$_status" \
           --argjson netKBps "$_netKB" --argjson diskKBps "$_diskKB" \
           --argjson ns "$(printf '%s\n' "${hnets[@]:-}" | jq -R . | jq -s .)" \
           --argjson ds "$(printf '%s\n' "${hds_names[@]:-}" | jq -R . | jq -s .)" \
-          '{name:$name, ip:$ip, networks:$ns, datastores:$ds,
+          '{name:$name, ip:$ip, id:$id, networks:$ns, datastores:$ds,
             cpuCores:$cores, cpuMhz:$mhz, memoryMB:($memBytes/1024/1024),
             cpuUsageMHz:$cpuUsageMHz, memUsageMB:$memUsageMB,
             powerState:$powerState, connectionState:$connectionState, overallStatus:$overallStatus,
