@@ -184,7 +184,7 @@ create_override_template() {
 # datastores     = [$(printf '"%s", ' "${DATASTORES[@]:-datastore76}" | sed 's/, $//')]
 # networks       = [$(printf '"%s", ' "${NETWORKS[@]:-VM Network}" | sed 's/, $//')]
 # resource_pools = [$(printf '"%s", ' "${POOLS[@]:-Resources}" | sed 's/, $//')]
-# host           = "node-ip"          # pin ALL this env's VMs to this node (e.g. 192.168.100.76)
+# host           = "node-ip"          # pin ALL this env's VMs to this node (e.g. 192.0.2.76)
 #
 # Changes here apply to existing VMs at their next deploy (deploy-vm.sh
 # re-syncs policy onto the vm-*.tfvars file automatically).
@@ -779,7 +779,7 @@ done
 
 # ─── 3a3. per-host network IPAM (standard-vSwitch, per-host subnets) ──
 # Hosts behind a standard vSwitch each sit on their OWN subnet ("VM Network"
-# on node A = 192.168.1.0/24, node B = 192.168.100.0/24). Define each host's
+# on node A = 198.51.100.0/24, node B = 192.0.2.0/24). Define each host's
 # gateway/netmask/ipam so a VM pinned to it gets the right range (no govc
 # dependency). Key = host name as govc reports it.
 echo ""
@@ -791,7 +791,7 @@ while true; do
     *) break ;;
   esac
   hnet=""
-  read -rp "  Host name (as govc reports — e.g. 192.168.100.74): " hnet
+  read -rp "  Host name (as govc reports — e.g. 192.0.2.74): " hnet
   [ -n "$hnet" ] || { warn "empty — skipped"; continue; }
   hgw=""
   read -rp "  Gateway for ${hnet} [${HNET_GW[$hnet]:-}]: " hgw; [ -n "$hgw" ] || hgw="${HNET_GW[$hnet]:-}"
@@ -941,7 +941,7 @@ for _n in "${SUBNET_NAMES[@]}"; do
 done
 [ -n "$NET_HOSTS_BLOCK" ] && NET_HOSTS_BLOCK="network_hosts = {
 ${NET_HOSTS_BLOCK}}
-" || NET_HOSTS_BLOCK=$'# network_hosts = {\n#   "DPortGroup_100" = "192.168.100.74"\n# }\n'
+" || NET_HOSTS_BLOCK=$'# network_hosts = {\n#   "DPortGroup_100" = "192.0.2.74"\n# }\n'
 
 cat > "${SRC}/vcenter.tfvars" <<EOF
 # ═══════════════════════════════════════════════════════════════════════════

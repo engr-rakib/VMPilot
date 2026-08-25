@@ -279,7 +279,7 @@ if [ ! -f "$OVERRIDE_TEMPLATE" ]; then
 # datastores     = ["datastore76"]
 # networks       = ["VM Network"]
 # resource_pools = ["Resources"]
-# host           = "192.168.100.76"    # pin ALL this env's VMs to this node
+# host           = "192.0.2.76"    # pin ALL this env's VMs to this node
 #
 # Changes here apply to existing VMs at their next deploy (deploy-vm.sh
 # re-syncs policy onto the vm-*.tfvars file automatically).
@@ -823,8 +823,8 @@ if [ -n "${NET_PORT_GROUP:-}" ] && [ -n "${NET_SUBNETS[${NET_PORT_GROUP}]:-}" ];
   info "Network ${NET_PORT_GROUP}: per-network IPAM applied (gw=${DEFAULT_GATEWAY} netmask=${DEFAULT_NETMASK} base=${DEFAULT_BASE_IP} end=${RANGE_END})"
 elif [ -n "${VM_HOST:-}" ] && [ -n "${NET_SUBNETS[$VM_HOST]:-}" ]; then
   # Chosen port group has NO entry (standard-vSwitch, per-host) but the pinned
-  # node has a host-keyed entry in network_subnets ("192.168.1.169" = {…}) —
-  # that host's own subnet ("VM Network" on 192.168.1.x vs the 192.168.100.x
+  # node has a host-keyed entry in network_subnets ("198.51.100.169" = {…}) —
+  # that host's own subnet ("VM Network" on 198.51.100.x vs the 192.0.2.x
   # default). Uses the host's gateway/netmask/ipam verbatim.
   HN_SUB="${NET_SUBNETS[$VM_HOST]}"
   HN_GW=$(awk -F';' '{for(i=1;i<=NF;i++) if($i~/^gw=/) {sub("^gw=","",$i); print $i}}' <<< "$HN_SUB")
@@ -840,8 +840,8 @@ elif [ -n "${VM_HOST:-}" ] && [ -n "${NET_SUBNETS[$VM_HOST]:-}" ]; then
   info "Node ${VM_HOST} pinned — '${NET_PORT_GROUP}' uses host entry network_subnets['${VM_HOST}'] range: ${DEFAULT_BASE_IP:-?}..${RANGE_END:-?} (gw=${DEFAULT_GATEWAY} /${DEFAULT_NETMASK})"
 else
   # NO port-group entry AND no host-keyed entry → the vCenter-wide gateway
-  # can't be trusted for a port group on a different subnet (e.g. 192.168.1.x vs
-  # default 192.168.100.1). A standard-vSwitch port group is PER-HOST: the same
+  # can't be trusted for a port group on a different subnet (e.g. 198.51.100.x vs
+  # default 192.0.2.1). A standard-vSwitch port group is PER-HOST: the same
   # label (e.g. "Management Network") sits on a different subnet on each node.
   # So when a node is pinned, derive the range from THAT node's own subnet (its
   # management IP /24); only fall back to asking for a gateway when no node is
@@ -1466,7 +1466,7 @@ generate_vm_entry() {
     #
     # Add a second NIC:
     # extra_networks = [
-    #   { network_name = "VM Network", ip_address = "192.168.101.20", netmask = 24 }
+    #   { network_name = "VM Network", ip_address = "198.51.100.20", netmask = 24 }
     # ]
     #
     # Add extra data disks (each = new VMDK on the datastore):
