@@ -475,7 +475,7 @@ live)
             ([.summary.quickStats.overallCpuUsage,
               .summary.quickStats.overallMemoryUsage] | join("|")) as $qs |
             ([.summary.runtime.powerState, .summary.runtime.connectionState,
-              .summary.overallStatus] | join("|")) as $rt |
+              .summary.overallStatus, .summary.runtime.bootTime] | join("|")) as $rt |
             "\($n)|\($moid)|\($hw)|\($qs)|\($rt)"' 2>/dev/null || true)
       fi
       declare -A _dpg_dvs=()
@@ -544,6 +544,7 @@ live)
         _pw=$(awk -F'|' '{print $7}' <<<"$_hw_qs")
         _conn=$(awk -F'|' '{print $8}' <<<"$_hw_qs")
         _status=$(awk -F'|' '{print $9}' <<<"$_hw_qs")
+        _boot=$(awk -F'|' '{print $10}' <<<"$_hw_qs")
         [ -n "$_cores" ] || _cores=0
         [ -n "$_mhz" ] || _mhz=0
         [ -n "$_memb" ] || _memb=0
@@ -562,6 +563,7 @@ live)
           --argjson cores "$_cores" --argjson mhz "$_mhz" \
           --argjson memBytes "$_memb" --argjson cpuUsageMHz "$_cpusg" --argjson memUsageMB "$_memsg" \
           --arg powerState "$_pw" --arg connectionState "$_conn" --arg overallStatus "$_status" \
+          --arg bootTime "$_boot" \
           --argjson netKBps "$_netKB" --argjson diskKBps "$_diskKB" \
           --argjson ns "$(printf '%s\n' "${hnets[@]:-}" | jq -R . | jq -s .)" \
           --argjson ds "$(printf '%s\n' "${hds_names[@]:-}" | jq -R . | jq -s .)" \
@@ -569,6 +571,7 @@ live)
             cpuCores:$cores, cpuMhz:$mhz, memoryMB:($memBytes/1024/1024),
             cpuUsageMHz:$cpuUsageMHz, memUsageMB:$memUsageMB,
             powerState:$powerState, connectionState:$connectionState, overallStatus:$overallStatus,
+            bootTime:$bootTime,
             netKBps:$netKBps, diskKBps:$diskKBps}')")
       done
       out=$(printf '[%s]' "$(IFS=,; printf '%s' "${H_ROWS[*]:-}")")
