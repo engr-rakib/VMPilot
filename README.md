@@ -613,6 +613,17 @@ bash scripts/backup.sh <project-root> /backups
 - **Encrypted credentials guide:** [`secure/README.md`](secure/README.md)
 - **S3 remote-state backend:** [`backends/s3/README.md`](backends/s3/README.md)
 
+## 🖥️ Web Console (commercial add-on)
+
+A Dockerized **Web Console** for VMPilot exists as a **paid add-on** — fleet
+dashboard, vCenter inventory, VM deploy wizard with live job streaming, events
+& alerting, per-VM SSH console, RBAC. It is intentionally **not part of this
+public repository**.
+
+- Purchase includes the `vmpilot-webui/` package: drop it into the project
+  root and run `./install.sh --webui`.
+- **Contact:** [engr-rakib.github.io/web](https://engr-rakib.github.io/web)
+
 ---
 
 ## 👤 Author & License

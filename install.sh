@@ -89,7 +89,8 @@ Options:
   --deps       Dependencies only — skip clone/base tools (re-run setup on demand)
   --no-keys    Skip generating the SOPS age key and SSH key
   --no-init    Skip running `terraform init`
-  --webui      Also deploy the Docker web console (vmpilot-webui/) — non-interactive
+  --webui      Deploy the Docker Web Console — COMMERCIAL ADD-ON: requires the
+               purchased vmpilot-webui/ package placed in the project root
   --no-webui   Never offer/deploy the web console
   --latest     Fetch latest tool versions at runtime instead of pinned ones
   --help | -h  Show this help
@@ -282,7 +283,7 @@ require_docker() {
 }
 
 webui_deploy() {
-  [ -d "vmpilot-webui" ] || die "vmpilot-webui/ not found in ${VMPILOT_DIR}"
+  [ -d "vmpilot-webui" ] || die "vmpilot-webui/ not found — the Web Console is a COMMERCIAL ADD-ON (not in the public repo). Purchase includes the vmpilot-webui/ package: place it in the project root and re-run with --webui. Contact: https://engr-rakib.github.io/web"
   echo ""
   info "Deploying the VMPilot Web UI (vmpilot-webui/) ..."
 
