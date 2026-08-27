@@ -382,11 +382,12 @@ options)
 live)
   LIVE_WHAT="${POS[0]:-vms}"
   # Short file cache: all consumers (CLI, executor, monitor) share one fresh
-  # dataset ~11s; live queries stay nearly real-time while page loads are fast.
+  # dataset ~60s; live queries stay fresh (dashboard 30s poll re-caches) while
+  # first page loads hit the boot-warmed cache instead of a ~7s cold govc run.
   LIVE_CACHE="${ROOT_DIR}/.cache/live-${VCENTER}-${LIVE_WHAT}.json"
   if [ -f "$LIVE_CACHE" ]; then
     age=$(( $(date +%s) - $(stat -c %Y "$LIVE_CACHE" 2>/dev/null || echo 0) ))
-    if [ "$age" -lt 11 ]; then cat "$LIVE_CACHE"; exit 0; fi
+    if [ "$age" -lt 60 ]; then cat "$LIVE_CACHE"; exit 0; fi
   fi
   if ! $GOVC_READY; then
     echo "{\"ok\":false,\"error\":\"no usable credentials for ${VCENTER}\"}" >&2
