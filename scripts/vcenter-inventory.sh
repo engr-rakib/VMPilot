@@ -424,8 +424,9 @@ live)
         .summary as $s |
         ($s.quickStats // {}) as $q |
         select($keep) |
-        {name:.name,
-         power:(.runtime.powerState // "unknown"),
+         {name:.name,
+          power:(.runtime.powerState // "unknown"),
+          template:(.config.template // false),
          cpu:($s.config.numCpu // null),
          memoryMB:($s.config.memorySizeMB // null),
          os:($s.config.guestFullName // null),
