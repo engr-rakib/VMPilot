@@ -76,6 +76,15 @@ MAX_ATTEMPTS=${MAX_ATTEMPTS:-20}
 RESERVE=${RESERVE:-30}
 [ "$RESERVE" -ge 0 ] 2>/dev/null || RESERVE=30
 
+# Strict base validation — never scan from garbage (octet >255, bad prefix
+# math and .256 candidates all start here). Standalone contract: JSON error.
+if ! [[ "$BASE_IP" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] \
+  || [ "${BASH_REMATCH[1]}" -gt 255 ] || [ "${BASH_REMATCH[2]}" -gt 255 ] \
+  || [ "${BASH_REMATCH[3]}" -gt 255 ] || [ "${BASH_REMATCH[4]}" -gt 255 ]; then
+  echo "{\"error\": \"invalid base_ip: $BASE_IP (need dotted-quad, octets 0-255)\"}"
+  exit 1
+fi
+
 # If range_end given, scan no further than the last IP of the block and never
 # cross the block boundary (e.g. .200 for a /24 deploy range).
 BLOCK_LAST=""
@@ -89,14 +98,14 @@ MAX_ATTEMPTS=$(if [ -n "$BLOCK_LAST" ]; then
 else echo "$MAX_ATTEMPTS"; fi)
 
 # ── Reserved IPs = the ip_address values declared in the per-VM config
-# files (deploy/<vcenter>/<env>/vm-*.tfvars, plus legacy deploy/<env>/vm-*.tfvars).
+# files (deploy/<server>/<vcenter>/<env>/vm-*.tfvars, plus legacy deploy/<env>/vm-*.tfvars).
 # These are the source of truth (config file = desired/assigned IP). Reading them
 # here means we no longer need <persist> .<vm>_ip tracking. A powered-off VM is
 # still "reserved" because its IP is in its config file, so ping alone can never
 # hand a used IP to a new VM.
 RESERVED_FILE_IPS=""
 ROOT="${PROJECT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}"
-CONFIG_GLOBS=( "${ROOT}/deploy/*/vm-*.tfvars" "${ROOT}/deploy/*/*/vm-*.tfvars" )
+CONFIG_GLOBS=( "${ROOT}/deploy/*/vm-*.tfvars" "${ROOT}/deploy/*/*/vm-*.tfvars" "${ROOT}/deploy/*/*/*/vm-*.tfvars" )
 shopt -s nullglob
 for CONFIG_GLOB in "${CONFIG_GLOBS[@]}"; do
   for f in $CONFIG_GLOB; do
@@ -114,6 +123,12 @@ RESERVED_FILE_IPS="$(printf '%s' "$RESERVED_FILE_IPS" | sort -u)"
 IFS='.' read -r o1 o2 o3 o4 <<< "$BASE_IP"
 
 for i in $(seq 0 "$MAX_ATTEMPTS"); do
+  # No cross-octet carry — .255 is the last handout in this /24; going past
+  # it would emit .256 (invalid) or leak into the next subnet. Stop loudly.
+  if [ $((o4 + i)) -gt 255 ]; then
+    echo "{\"error\": \"range exhausted at $o1.$o2.$o3.255 (no cross-subnet carry)\"}"
+    exit 1
+  fi
   candidate="$o1.$o2.$o3.$((o4 + i))"
   # never hand out an IP in the reserved low range (gateway + RESERVE hosts) —
   # those are for routers/switches/DNS/vCenter/special uses, not VMs. Assumes

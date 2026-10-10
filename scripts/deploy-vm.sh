@@ -23,6 +23,9 @@ set -euo pipefail
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --lan-up   # connect NICs + wait IP only
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --no-clean  # keep decrypted .auto.tfvars
 #
+# Exit codes: 0 = deployed + LAN + hardening OK · 1 = error · 3 = VM deployed
+# but HARDENING FAILED (marker deploy/<srv>/<vc>/<env>/.hardening-<vm>.failed;
+# retry with --lan-up; deploy-sync R2 never skips marked VMs).
 #   Example:
 #     ./scripts/deploy-vm.sh dc_pilot_192.0.2.10 dev web-02
 #
@@ -443,6 +446,9 @@ echo "  --> targeting ONLY: ${VM_NAME}"
 # Auto-runs after apply; --no-lan skips it; --lan-up runs ONLY this.
 lan_up() {
   local _tf="${ROOT_DIR}/terraform/credentials.auto.tfvars"
+  # Exit contract: 0 = LAN + hardening OK; 3 = VM up but hardening FAILED
+  # (marker .hardening-<vm>.failed). Callers must propagate, not swallow.
+  _HARDEN_FAILED=0
   [ -f "$_tf" ] || { warn "no decrypted creds (${_tf}) — run sops-decrypt first"; return 1; }
   command -v govc >/dev/null || { warn "govc missing — connect NICs by hand in vCenter"; return 1; }
   command -v jq >/dev/null || { warn "jq missing — connect NICs by hand in vCenter"; return 1; }
@@ -578,6 +584,7 @@ lan_up() {
     done
     if timeout 1500 ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "export VMPILOT_SSH_KEY='${_VMKEY}'; sudo bash -c 'bash /etc/vmpilot/hardening.sh >> /var/log/vmpilot-hardening.log 2>&1'; echo \"HARDEN_RC=\$?\"" 2>/dev/null | grep -q "HARDEN_RC=0"; then
       ok "hardening applied on ${VM_NAME} (see /var/log/vmpilot-hardening.log)"
+      rm -f "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
       ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "printf '# VMPilot hardening manifest\n# Source: secure/<server>/<vcenter>/hardening.sh (+ <env>/hardening.sh)\ndate: %s\nscript_exit=0\nlog=/var/log/vmpilot-hardening.log\n' \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee /etc/vmpilot-hardening.md >/dev/null" 2>/dev/null || true
       # Pipeline checks: surface the guest VERIFY lines in deploy/job output
       # (WebUI jobs display shows these — per-step PASS/FAIL/SKIP).
@@ -585,6 +592,11 @@ lan_up() {
       ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "grep -h '^CHECK ' /var/log/vmpilot-hardening.log 2>/dev/null | tail -20" 2>/dev/null | sed 's/^/  /' || true
     else
       warn "hardening unreachable/failed (SSH key?) — run manually: sudo bash /etc/vmpilot/hardening.sh"
+      # Host-side status marker: the VM exists but is UNHARDENED. deploy-sync
+      # R2 must not treat it as done — clear with: hardening re-run (deploy
+      # --lan-up) or manual run, which rm's this file on success.
+      date -u +%Y-%m-%dT%H:%M:%SZ > "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
+      _HARDEN_FAILED=1
     fi
     # Phase 5 (offline-boot safety): first boot without LAN means cloud-init's
     # apt installs never ran. If the template lacks lvm2/growpart, the LVM
@@ -598,6 +610,7 @@ lan_up() {
     fi
   fi
   unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME
+  return "${_HARDEN_FAILED:-0}"
 }
 
 # ─── Credentials ──────────────────────────────────────────────────────────
@@ -606,9 +619,12 @@ DECRYPT_SCRIPT="${SCRIPT_DIR}/sops-decrypt.sh"
 if [ "$LANUP_ONLY" = true ]; then
   LANUP_SKIP_GATE=true
   bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV"
-  lan_up
+  lan_up; _lan_rc=$?
   bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" --clean
-  exit 0
+  if [ "$_lan_rc" = "3" ]; then
+    error "LAN is up but hardening FAILED for ${VM_NAME} — marker: ${ENV:-?}/.hardening-${VM_NAME}.failed. Re-run --lan-up after fixing SSH, or run hardening manually."
+  fi
+  exit "$_lan_rc"
 fi
 bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV"
 
@@ -701,10 +717,21 @@ else
     fi
   fi
   # LAN up LAST (fast boot happened disconnected): connect NICs + wait IPv4.
+  # Exit 3 = VM deployed + reachable BUT hardening failed (marker file) —
+  # CI/jobs/sync treat this as failure so unhardened VMs never pass silent.
   if [ "$NO_LAN" = true ]; then
     info "LAN left disconnected (--no-lan) — bring it up later: bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME} --lan-up"
   else
-    lan_up || warn "LAN auto-connect had issues — retry manually (see above)"
+    if lan_up; then
+      ok "LAN + hardening complete: ${VM_NAME}"
+    else
+      _lan_rc=$?
+      if [ "$_lan_rc" = "3" ]; then
+        error "Deployed but HARDENING FAILED: ${VM_NAME} (marker .hardening-${VM_NAME}.failed) — retry: bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME} --lan-up"
+        exit 3
+      fi
+      warn "LAN auto-connect had issues (rc=${_lan_rc}) — retry manually (see above)"
+    fi
   fi
 fi
 

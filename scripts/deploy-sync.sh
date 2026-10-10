@@ -13,7 +13,7 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Purpose  : Auto-deploy loop that satisfies REQUIREMENTS.md.
 #
-#            Drops a per-VM config file into deploy/<vcenter>/<env>/ → this
+#            Drops a per-VM config file into deploy/<server>/<vcenter>/<env>/ → this
 #            script notices it and deploys that ONE VM (other VMs untouched).
 #
 # Behavior (per config file found):
@@ -47,7 +47,11 @@ if [ -z "$VCENTER" ] || [ -z "$ENV" ]; then
 fi
 
 TF_DIR="${ROOT_DIR}/terraform"
-ENV_DIR="${ROOT_DIR}/deploy/${VCENTER}/${ENV}"
+# Nested layout: secure/<srv>/<vc>/ + deploy/<srv>/<vc>/ (tolerant reads).
+vdir_for() {
+  local _r="${ROOT_DIR:-.}"; if [ -d "${_r}/$1/${2##*_}/$2" ]; then echo "$1/${2##*_}/$2"; else echo "$1/$2"; fi
+}
+ENV_DIR="${ROOT_DIR}/$(vdir_for deploy "$VCENTER")/${ENV}"
 
 [ -d "$ENV_DIR" ] || die "Env dir not found: ${ENV_DIR}"
 
@@ -61,7 +65,7 @@ tracked_vm() {
 }
 
 # ─── Gather per-VM config info ─────────────────────────────────────────────
-# One file per VM: deploy/<vcenter>/<env>/vm-<hostname>_<ip>.tfvars
+# One file per VM: deploy/<server>/<vcenter>/<env>/vm-<hostname>_<ip>.tfvars
 # The filename itself shows hostname + IP at a glance.
 # key        = for_each key (hostname)           → vm_configs.<key>.hostname
 # base_ip    = ip_address base from the file     → scan starts here
@@ -83,12 +87,14 @@ done
 
 echo ""
 echo "=========================================================="
-echo "  Sync scan: deploy/${VCENTER}/${ENV}/  (mode: ${MODE})"
+echo "  Sync scan: $(vdir_for deploy "$VCENTER")/${ENV}/  (mode: ${MODE})"
 echo "=========================================================="
 
 CHANGED=0
 SKIPPED=0
 MISSING_CFG=0
+FAILED=""
+FAILED_N=0
 
 # ─── R5: state-tracked VMs whose config is missing ────────────────────────
 # If the VM is gone from vCenter too, the state entry is stale → remove it
@@ -113,11 +119,15 @@ for vm in $(tracked_vm); do
   if [ "$CFG_FOUND" = false ]; then
     if [ -z "${CFG_KEY[$vm]:-}" ]; then
       if [ -n "$VCENTER_VMS" ] && ! grep -qE "/${vm}$" <<< "$VCENTER_VMS"; then
-        warn "R5: VM '${vm}' not in vCenter and has no config — removing from state (stale entry)."
-        terraform -chdir="$TF_DIR" state rm -state="$STATE_FILE" \
-          "module.vm[\"${vm}\"].vsphere_virtual_machine.this" \
-          "data.external.next_free_ip[\"${vm}\"]" \
-          >/dev/null 2>&1 || true
+        if [ "$MODE" = "apply" ]; then
+          warn "R5: VM '${vm}' not in vCenter and has no config — removing from state (stale entry)."
+          terraform -chdir="$TF_DIR" state rm -state="$STATE_FILE" \
+            "module.vm[\"${vm}\"].vsphere_virtual_machine.this" \
+            "data.external.next_free_ip[\"${vm}\"]" \
+            >/dev/null 2>&1 || true
+        else
+          info "R5 (dry-run): VM '${vm}' not in vCenter and has no config — would remove from state."
+        fi
         MISSING_CFG=1
       elif [ -n "$VCENTER_VMS" ]; then
         warn "R5: VM '${vm}' is in state + vCenter but has no config file — recreate its config or run destroy."
@@ -135,13 +145,17 @@ for host in "${!CFG_KEY[@]}"; do
   [ -n "$want_ip" ] && tracked_ip="$want_ip"
 
   if grep -q '^module\.vm\["'$host'"\]' <<< "$STATE_LIST"; then
-    # VM already tracked
-    if [ -n "$tracked_ip" ] && [ "$tracked_ip" = "$want_ip" ]; then
+    # VM already tracked — but a hardening-failure marker means it is
+    # UNHARDENED: never R2-skip, fall through to R3 retry instead.
+    if [ -f "${ENV_DIR}/.hardening-${host}.failed" ]; then
+      info "R3 retry: ${host}  (previous hardening failed — retrying deploy + hardening)"
+    elif [ -n "$tracked_ip" ] && [ "$tracked_ip" = "$want_ip" ]; then
       info "R2 skip: ${host}  (ip ${tracked_ip} unchanged)"
       SKIPPED=$((SKIPPED + 1))
       continue
+    else
+      info "R3 deploy: ${host}  (ip ${want_ip:-?} → next free)"
     fi
-    info "R3 deploy: ${host}  (ip ${want_ip:-?} → next free)"
   else
     info "R1 deploy: ${host}  (new VM, next free IP)"
   fi
@@ -155,14 +169,29 @@ for host in "${!CFG_KEY[@]}"; do
   if [ "$MODE" = "plan" ]; then
     bash "${SCRIPT_DIR}/deploy-vm.sh" "$VCENTER" "$ENV" "$host" --plan || true
   else
-    bash "${SCRIPT_DIR}/deploy-vm.sh" "$VCENTER" "$ENV" "$host"
+    # A deploy that exits 3 (hardening failed) must NOT abort the loop —
+    # record it and continue; the summary below fails loudly instead.
+    if bash "${SCRIPT_DIR}/deploy-vm.sh" "$VCENTER" "$ENV" "$host"; then
+      rm -f "${ENV_DIR}/.hardening-${host}.failed" 2>/dev/null || true
+    else
+      _drc=$?
+      warn "deploy failed for ${host} (rc=${_drc}) — continuing with remaining VMs"
+      FAILED="${FAILED} ${host}(rc=${_drc})"
+      FAILED_N=$((FAILED_N + 1))
+    fi
   fi
 done
 
 echo ""
 echo "=========================================================="
-echo "  Sync done: ${CHANGED} changed, ${SKIPPED} unchanged, ${MISSING_CFG} missing-config warning(s)"
+echo "  Sync done: ${CHANGED} changed, ${SKIPPED} unchanged, ${MISSING_CFG} missing-config warning(s), ${FAILED_N} failed"
+[ "$FAILED_N" -gt 0 ] && echo "  Failed:${FAILED}"
 echo "=========================================================="
+
+if [ "$FAILED_N" -gt 0 ]; then
+  error "sync finished with ${FAILED_N} failure(s) — fix above, then re-run"
+  exit 1
+fi
 
 if [ "$MISSING_CFG" -eq 1 ] && [ "$MODE" = "apply" ]; then
   echo "NOTE: some VMs are in state but have no config file — run destroy.sh explicitly if you want them gone."

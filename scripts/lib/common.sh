@@ -84,27 +84,22 @@ normalize_size() {
 }
 
 to_mb() {
-  local input="$1"
-  input="${input^^}"
-  case "$input" in
-    *GB) local val="${input%GB}"; echo "$(( val * 1024 ))" ;;
-    *G)  local val="${input%G}"; echo "$(( val * 1024 ))" ;;
-    *MB) echo "${input%MB}" ;;
-    *M)  echo "${input%M}" ;;
-    *)   echo "$(( input * 1024 ))" ;;  # bare number = GB
-  esac
+  local input="${1^^}" num mult=1024
+  case "$input" in *MB|*M) mult=1 ;; esac
+  num="$(grep -oE '^[0-9]+' <<< "$input" || true)"
+  [ -n "$num" ] || num=0
+  echo "$(( num * mult ))"
 }
 
 to_gb() {
-  local input="$1"
-  input="${input^^}"
+  local input="${1^^}" num
   case "$input" in
-    *GB) echo "${input%GB}" ;;
-    *G)  echo "${input%G}" ;;
-    *MB) local val="${input%MB}"; echo "$(( (val + 512) / 1024 ))" ;;
-    *M)  local val="${input%M}";  echo "$(( (val + 512) / 1024 ))" ;;
-    *)   echo "$input" ;;
+    *GB|*G) num="$(grep -oE '^[0-9]+' <<< "$input" || true)" ;;
+    *MB|*M) num="$(grep -oE '^[0-9]+' <<< "$input" || true)"; [ -n "$num" ] || num=0; echo "$(( (num + 512) / 1024 ))"; return ;;
+    *) num="$(grep -oE '^[0-9]+' <<< "$input" || true)" ;;
   esac
+  [ -n "$num" ] || num=0
+  echo "$num"
 }
 
 human_size() {
@@ -123,4 +118,13 @@ human_size() {
   else
     echo "${mb}M"
   fi
+}
+
+# ─── IP validation ───────────────────────────────────────────────────────
+valid_ipv4() { # $1 → exit 0 iff strict dotted-quad, every octet 0–255
+  local a b c d
+  [[ "${1:-}" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] || return 1
+  a="${BASH_REMATCH[1]}"; b="${BASH_REMATCH[2]}"
+  c="${BASH_REMATCH[3]}"; d="${BASH_REMATCH[4]}"
+  [ "$a" -le 255 ] && [ "$b" -le 255 ] && [ "$c" -le 255 ] && [ "$d" -le 255 ]
 }

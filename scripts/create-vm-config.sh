@@ -22,12 +22,12 @@ set -euo pipefail
 #   ./scripts/create-vm-config.sh myvm               # name preset
 #   ./scripts/create-vm-config.sh <vcenter> <env> myvm   # vCenter + env preset
 #
-#   Output: deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars  (per-VM config)
+#   Output: deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars  (per-VM config)
 #           Existing VMs in the file are never touched.
-#           Per-vCenter defaults auto-load from secure/<vcenter>/vcenter.tfvars.
+#           Per-vCenter defaults auto-load from secure/<server>/<vcenter>/vcenter.tfvars.
 #
 #   After generation — review & deploy:
-#     vi deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars   # uncomment what you need
+#     vi deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars   # uncomment what you need
 #     bash scripts/deploy-vm.sh <vcenter> <env> <name>  # deploy THIS VM only
 #
 #   Add more VMs by running this script again — each VM gets its own file.
@@ -108,7 +108,7 @@ if [ "$BATCH_MODE" = true ]; then
 fi
 
 # ─── Built-in default values (fallback) ───────────────────────────────
-# Per-vCenter defaults live at secure/<vcenter>/vm-defaults.conf (gitignored,
+# Per-vCenter defaults live at secure/<server>/<vcenter>/vm-defaults.conf (gitignored,
 # holds the extra-user default password). They are loaded AFTER the vCenter is
 # selected and OVERRIDE these built-ins. If the file is missing, these built-in
 # values below are used.
@@ -127,7 +127,7 @@ fi
 : "${DEFAULT_SWAP:=N}"
 if [ -z "${DEFAULT_MOUNTS[*]:-}" ]; then DEFAULT_MOUNTS=("/:10" "/home:5" "/var:15" "/tmp:2"); fi
 # vCenter inventory/network defaults — resolved in load_vcenter_defaults from
-# secure/<vc>/vcenter.tfvars. Pre-initialize so the nested ${x:-$DEFAULT_*}
+# secure/<srv>/<vc>/vcenter.tfvars. Pre-initialize so the nested ${x:-$DEFAULT_*}
 # merges never trip `set -u` when a key is absent from the file.
 : "${DEFAULT_DATACENTER:=}"
 : "${DEFAULT_CLUSTER:=}"
@@ -165,22 +165,23 @@ VM_NAME="${VM_NAME//_/-}"
 ok_inline "Name: ${VM_NAME}"
 
 # vCenter + environment
-# Layout: deploy/<vcenter>/<env>/vm-*.tfvars ; creds/inventory in secure/<vcenter>/.
-# A vCenter = a secure/<vcenter>/ dir holding credentials.tfvars + vcenter.tfvars
-# (the real configured identity). deploy/<vcenter>/ is where VM configs live.
+# Layout: deploy/<server>/<vcenter>/<env>/vm-*.tfvars ; creds/inventory in secure/<server>/<vcenter>/.
+# A vCenter = a secure/<server>/<vcenter>/ dir holding credentials.tfvars + vcenter.tfvars
+# (the real configured identity). deploy/<server>/<vcenter>/ is where VM configs live.
 # Only vCenters that exist in secure/ are offered — stale deploy/ dirs (leftover
 # test setups) are never listed.
 info "vCenter"
 VCENTERS=()
-for d in "${SCRIPT_DIR}"/../secure/*/; do
+for d in "${SCRIPT_DIR}"/../secure/*/ "${SCRIPT_DIR}"/../secure/*/*/; do
   [ -d "$d" ] || continue
   v=$(basename "$d")
-  [ "$v" = "README.md" ] && continue
+  [ "$v" = "README.md" ] || [ "$v" = "_master" ] && continue
+  [ -f "${d}.platform-creds" ] && continue
   [ -f "${d}credentials.tfvars" ] || [ -f "${d}vcenter.tfvars" ] || continue
   [[ " ${VCENTERS[*]} " == *" $v "* ]] || VCENTERS+=("$v")
 done
 if [ "${#VCENTERS[@]}" -eq 0 ]; then
-  die "No vCenter configured yet — run: bash scripts/vcenter-setup.sh   (creates secure/<vcenter>/ + deploy/<vcenter>/)"
+  die "No vCenter configured yet — run: bash scripts/vcenter-setup.sh   (creates secure/<server>/<vcenter>/ + deploy/<server>/<vcenter>/)"
 fi
 
 if [ -n "$PRESET_VCENTER" ]; then
@@ -198,35 +199,80 @@ if [ -n "$PRESET_VCENTER" ]; then
 fi
 
 if [ -z "$VCENTER" ]; then
-  i=1
-  for v in "${VCENTERS[@]}"; do echo "  $i) $v"; i=$((i+1)); done
-  while true; do
-    read -rp "$(echo -e "${CYAN}Select vCenter${NC} [1]: ")" vc_sel
-    vc_sel="${vc_sel:-1}"
-    if [[ "$vc_sel" =~ ^[0-9]+$ ]] && [ "$vc_sel" -ge 1 ] && [ "$vc_sel" -le "${#VCENTERS[@]}" ]; then
-      VCENTER="${VCENTERS[$((vc_sel-1))]}"
-      break
-    fi
-    warn "Invalid selection '${vc_sel}' — enter 1..${#VCENTERS[@]}."
+  # Platform first (a server can host many datacenters; platforms may be
+  # vSphere or Proxmox later — entries carry their platform type).
+  declare -A PLAT_DCS=()
+  for v in "${VCENTERS[@]}"; do
+    _srv="${v##*_}"
+    PLAT_DCS["$_srv"]+="${v} "
   done
+  if [ "${#PLAT_DCS[@]}" -eq 1 ]; then
+    _only_srv="$(printf '%s\n' "${!PLAT_DCS[@]}")"
+    info "Platform: ${_only_srv} (only one onboarded)"
+    _srv="$_only_srv"
+  else
+    echo "  Platform (server):"
+    _i=1; _srvs=()
+    for _s in $(printf '%s\n' "${!PLAT_DCS[@]}" | sort); do
+      _srvs+=("$_s")
+      _n=$(printf '%s' "${PLAT_DCS[$_s]}" | wc -w)
+      echo "    $((_i++))) $_s  (vSphere · ${_n} datacenter$([ "$_n" = 1 ] || echo "s"))"
+    done
+    while true; do
+      read -rp "$(echo -e "${CYAN}Select platform${NC} [1]: ")" _psel
+      _psel="${_psel:-1}"
+      if [[ "$_psel" =~ ^[0-9]+$ ]] && [ "$_psel" -ge 1 ] && [ "$_psel" -le "${#_srvs[@]}" ]; then
+        _srv="${_srvs[$((_psel-1))]}"
+        break
+      fi
+      warn "Invalid selection '${_psel}' — enter 1..${#_srvs[@]}."
+    done
+  fi
+  # Datacenter on that platform (entry = <dc>_<srv>; display the DC part).
+  _dcs=(${PLAT_DCS[$_srv]})
+  if [ "${#_dcs[@]}" -eq 1 ]; then
+    VCENTER="${_dcs[0]}"
+    ok_inline "Datacenter: ${VCENTER%_"$_srv"} (${VCENTER})"
+  else
+    echo "  Datacenter on ${_srv}:"
+    _i=1; for _d in "${_dcs[@]}"; do echo "    $((_i++))) ${_d%_"$_srv"}"; done
+    while true; do
+      read -rp "$(echo -e "${CYAN}Select datacenter${NC} [1]: ")" _dsel
+      _dsel="${_dsel:-1}"
+      if [[ "$_dsel" =~ ^[0-9]+$ ]] && [ "$_dsel" -ge 1 ] && [ "$_dsel" -le "${#_dcs[@]}" ]; then
+        VCENTER="${_dcs[$((_dsel-1))]}"
+        break
+      fi
+      warn "Invalid selection '${_dsel}' — enter 1..${#_dcs[@]}."
+    done
+  fi
 fi
-mkdir -p "${SCRIPT_DIR}/../deploy/${VCENTER}"
+# Nested layout: entries live at secure/<srv>/<vc>/ + deploy/<srv>/<vc>/.
+# NSEC/NDEP = always-nested (writers); SEC_VDIR/DEP_VDIR = tolerant (readers).
+NSEC="secure/${VCENTER##*_}/${VCENTER}"
+NDEP="deploy/${VCENTER##*_}/${VCENTER}"
+vdir_for() {
+  local _r="${ROOT_DIR:-.}"; if [ -d "${_r}/$1/${2##*_}/$2" ]; then echo "$1/${2##*_}/$2"; else echo "$1/$2"; fi
+}
+SEC_REL="$(vdir_for secure "$VCENTER")"; DEP_REL="$(vdir_for deploy "$VCENTER")"
+SEC_VDIR="${SCRIPT_DIR}/../${SEC_REL}"; DEP_VDIR="${SCRIPT_DIR}/../${DEP_REL}"
+mkdir -p "${SCRIPT_DIR}/../${NDEP}"
 info "vCenter: ${VCENTER}"
 
 # ─── Per-vCenter defaults (editable, gitignored) ─────────────────────
-# secure/<vcenter>/vm-defaults.conf holds THIS vCenter's defaults (extra-user
+# secure/<server>/<vcenter>/vm-defaults.conf holds THIS vCenter's defaults (extra-user
 # default password etc.). Loaded now (after selection) so each vCenter can
 # have its own policy-like defaults; missing file → built-ins used above.
-VCDEFAULTS="${SCRIPT_DIR}/../secure/${VCENTER}/vm-defaults.conf"
+VCDEFAULTS="${SEC_VDIR}/vm-defaults.conf"
 if [ -f "$VCDEFAULTS" ]; then
   set -a; source "$VCDEFAULTS"; set +a
-  info "Per-vCenter defaults: secure/${VCENTER}/vm-defaults.conf (loaded)"
+  info "Per-vCenter defaults: ${SEC_REL}/vm-defaults.conf (loaded)"
 fi
 
 info "Environment (on ${VCENTER})"
-# Env sub-dirs under deploy/<vcenter>/ (dev/prod/staging/qa/...) → pick or create.
+# Env sub-dirs under deploy/<server>/<vcenter>/ (dev/prod/staging/qa/...) → pick or create.
 ENVS=()
-for d in "${SCRIPT_DIR}"/../deploy/"${VCENTER}"/*/; do
+for d in "${DEP_VDIR}"/*/; do
   [ -d "$d" ] || continue
   e=$(basename "$d")
   [[ " ${ENVS[*]} " == *" $e "* ]] || ENVS+=("$e")
@@ -253,22 +299,39 @@ else
     ENV="${ENVS[$((env_sel-1))]}"
   fi
 fi
-mkdir -p "${SCRIPT_DIR}/../deploy/${VCENTER}/${ENV}"
-ENV_DIR="${SCRIPT_DIR}/../deploy/${VCENTER}/${ENV}"
+mkdir -p "${SCRIPT_DIR}/../${NDEP}/${ENV}"
+ENV_DIR="${SCRIPT_DIR}/../${NDEP}/${ENV}"
 
-# Per-env override dir under secure/<vcenter>/<env>/ — used when the operator
+# Common server administrators (fleet-wide break-glass accounts). Stored in
+# the DC hardening.sh (COMMON_USERS=...) so every future VM of this platform
+# gets them — this prompt is the control point at creation time.
+_DC_HARDEN="${SCRIPT_DIR}/../${NSEC}/hardening.sh"
+_CUR_ADMINS="$(grep -oP '^COMMON_USERS="\K[^"]*' "$_DC_HARDEN" 2>/dev/null | head -1 || true)"
+prompt_optional VM_ADMINS "Common server admins, space list (empty=none)" "$_CUR_ADMINS"
+if [ "${VM_ADMINS:-}" != "${_CUR_ADMINS:-}" ] && [ -f "$_DC_HARDEN" ]; then
+  _esc="$(printf '%s' "$VM_ADMINS" | sed -e 's/[\/&]/\\&/g')"
+  sed -i -E "s/^COMMON_USERS=\".*\"/COMMON_USERS=\"$_esc\"/" "$_DC_HARDEN" \
+    && ok_inline "DC policy updated: COMMON_USERS='${VM_ADMINS:-<empty>}'" \
+    || warn "Could not update COMMON_USERS in ${_DC_HARDEN#../} — edit by hand."
+elif [ -n "${VM_ADMINS:-}" ] && [ ! -f "$_DC_HARDEN" ]; then
+  warn "No DC hardening.sh yet — admins apply from next onboard; this VM skips common accounts."
+elif [ -n "${_CUR_ADMINS:-}" ]; then
+  ok_inline "Common admins (from DC policy): ${_CUR_ADMINS}"
+fi
+
+# Per-env override dir under secure/<server>/<vcenter>/<env>/ — used when the operator
 # wants per-env values (datastore/network/resource_pool/cluster/template OR
 # dns/network/base-ip/...) to differ from the top-level
-# secure/<vcenter>/vcenter.tfvars. Auto-created with a commented template;
+# secure/<server>/<vcenter>/vcenter.tfvars. Auto-created with a commented template;
 # per-env keys WIN only when actually set (uncommented).
-mkdir -p "${SCRIPT_DIR}/../secure/${VCENTER}/${ENV}"
-OVERRIDE_TEMPLATE="${SCRIPT_DIR}/../secure/${VCENTER}/${ENV}/vcenter.tfvars"
+mkdir -p "${SCRIPT_DIR}/../${NSEC}/${ENV}"
+OVERRIDE_TEMPLATE="${SCRIPT_DIR}/../${NSEC}/${ENV}/vcenter.tfvars"
 if [ ! -f "$OVERRIDE_TEMPLATE" ]; then
   cat > "$OVERRIDE_TEMPLATE" <<EOF
-# Per-env override — secure/${VCENTER}/${ENV}/vcenter.tfvars
-# Uncomment + set a key to OVERRIDE the top-level secure/${VCENTER}/vcenter.tfvars
+# Per-env override — ${NSEC}/${ENV}/vcenter.tfvars
+# Uncomment + set a key to OVERRIDE the top-level ${NSEC}/vcenter.tfvars
 # for this environment only. Keys left commented fall back to the top-level value.
-# (credentials are NEVER per-env — secrets stay in secure/${VCENTER}/credentials.tfvars)
+# (credentials are NEVER per-env — secrets stay in secure/${VCENTER##*_}/credentials.tfvars)
 #
 # vCenter resource selections — OPTIONAL per-env pinning. By default these are
 # auto-discovered by govc at VM-create time; uncomment only if THIS environment
@@ -293,13 +356,13 @@ if [ ! -f "$OVERRIDE_TEMPLATE" ]; then
 EOF
 fi
 
-# Per-env user-group policy (secure/<vc>/<env>/user-groups.tfvars) — auto-created
+# Per-env user-group policy (secure/<srv>/<vc>/<env>/user-groups.tfvars) — auto-created
 # with a default policy if this env has none yet (same standard groups as a new
 # vCenter). Edit to tighten/loosen what each group can do; per-VM configs
 # reference groups by name via extra_users[].groups.
-if [ ! -f "${SCRIPT_DIR}/../secure/${VCENTER}/${ENV}/user-groups.tfvars" ]; then
-  cat > "${SCRIPT_DIR}/../secure/${VCENTER}/${ENV}/user-groups.tfvars" <<EOF
-# User group policy — secure/${VCENTER}/${ENV}/user-groups.tfvars
+if [ ! -f "${SCRIPT_DIR}/../${NSEC}/${ENV}/user-groups.tfvars" ]; then
+  cat > "${SCRIPT_DIR}/../${NSEC}/${ENV}/user-groups.tfvars" <<EOF
+# User group policy — ${NSEC}/${ENV}/user-groups.tfvars
 # Defines what OS-level access each GROUP grants to VM extra_users in THIS env.
 # Users are members of groups (a user can be in MANY groups); permission lives
 # on the group. Applied to every VM in this env at deploy time.
@@ -344,21 +407,21 @@ user_groups = {
   }
 }
 EOF
-  info "Created secure/${VCENTER}/${ENV}/user-groups.tfvars (default group policy — edit as needed)"
+  info "Created ${NSEC}/${ENV}/user-groups.tfvars (default group policy — edit as needed)"
 fi
 
 # Warn early if credentials for this vCenter are missing — otherwise the config
 # is created fine but deploy-vm.sh will fail later ("Encrypted files not found").
-if [ ! -f "${SCRIPT_DIR}/../secure/${VCENTER}/credentials.tfvars" ]; then
-  warn "No secure/${VCENTER}/credentials.tfvars yet — config will be created but DEPLOY WILL FAIL."
+if [ ! -f "${SEC_VDIR}/credentials.tfvars" ] && [ ! -f "${SCRIPT_DIR}/../secure/${VCENTER##*_}/credentials.tfvars" ]; then
+  warn "No ${SEC_REL}/credentials.tfvars yet — config will be created but DEPLOY WILL FAIL."
   echo "  Fix: bash scripts/vcenter-setup.sh   (pick/create ${VCENTER}, fill vCenter creds)"
 fi
 echo ""
 
-# Per-vCenter defaults → auto-load from secure/<vcenter>/vcenter.tfvars
+# Per-vCenter defaults → auto-load from secure/<server>/<vcenter>/vcenter.tfvars
 # (plaintext terraform-style file; only present when vcenter-setup.sh ran).
 # Sets per-vCenter: inventory + domain + gateway/netmask/dns + ipam_base_ip.
-# Per-env overrides: secure/<vcenter>/<env>/vcenter.tfvars (if present) WIN.
+# Per-env overrides: secure/<server>/<vcenter>/<env>/vcenter.tfvars (if present) WIN.
 load_vcenter_defaults() {
   local f="$1"
   [ -f "$f" ] || return 0
@@ -504,24 +567,25 @@ load_vcenter_defaults() {
   set -e -o pipefail
 }
 
-load_vcenter_defaults "${SCRIPT_DIR}/../secure/${VCENTER}/vcenter.tfvars"
-info "vCenter defaults loaded from secure/${VCENTER}/vcenter.tfvars"
-OVERRIDE_FILE="${SCRIPT_DIR}/../secure/${VCENTER}/${ENV}/vcenter.tfvars"
+load_vcenter_defaults "${SEC_VDIR}/vcenter.tfvars"
+info "vCenter defaults loaded from ${SEC_REL}/vcenter.tfvars"
+OVERRIDE_FILE="${SEC_VDIR}/${ENV}/vcenter.tfvars"
 if [ -f "$OVERRIDE_FILE" ]; then
   load_vcenter_defaults "$OVERRIDE_FILE"
-  info "Per-env overrides loaded from secure/${VCENTER}/${ENV}/vcenter.tfvars (win over top-level)"
+  info "Per-env overrides loaded from ${SEC_REL}/${ENV}/vcenter.tfvars (win over top-level)"
 fi
 echo ""
 
 prompt_required VM_DOMAIN "Domain"                       "$DEFAULT_DOMAIN"
 ok_inline "Domain: ${VM_DOMAIN}"
-prompt_required VM_ANNOT  "Description"                  "${VM_NAME} Server"
+prompt_required VM_ANNOT  "Description"                  "${VM_NAME} ${DEFAULT_ANNOTATION:-Server}"
 echo ""
 
 # ===========================================================================
 # 2. vCenter resource selection (govc — fully dynamic)
 # ===========================================================================
-VCRED_FILE="${SCRIPT_DIR}/../secure/${VCENTER}/credentials.tfvars"
+VCRED_FILE="${SEC_VDIR}/credentials.tfvars"
+[ -f "$VCRED_FILE" ] || VCRED_FILE="${SCRIPT_DIR}/../secure/${VCENTER##*_}/credentials.tfvars"
 
 GOVC_READY=false
 if [ -f "$VCRED_FILE" ] && command -v govc &>/dev/null; then
@@ -578,7 +642,7 @@ govc_pick() {
   local allow="${5:-}" mark="${6:-0}" back_ok="${7:-0}"
   local items=() line curated=()
   # Single dedicated data provider — scripts/vcenter-inventory.sh (cache-first
-  # from secure/<vc>/vcenter.tfvars + live govc gap-fill for options the file
+  # from secure/<srv>/<vc>/vcenter.tfvars + live govc gap-fill for options the file
   # lacks). Same source the Web UI reads, so CLI and UI always agree.
   local INV_SCRIPT="${SCRIPT_DIR}/vcenter-inventory.sh"
   if [ -f "$INV_SCRIPT" ]; then
@@ -879,6 +943,10 @@ fi
 echo ""
 
 prompt_required BASE_IP "Starting IP for free-IP scan (range start; based on port group subnet)" "$DEFAULT_BASE_IP"
+until valid_ipv4 "$BASE_IP"; do
+  warn "Invalid IPv4: ${BASE_IP} (need dotted-quad, octets 0-255)"
+  prompt_required BASE_IP "Starting IP for free-IP scan (range start; based on port group subnet)" "$DEFAULT_BASE_IP"
+done
 ok_inline "Scan from: ${BASE_IP}"
 [ -n "${RANGE_END:-}" ] && ok_inline "Block ends at: ${RANGE_END}"
 echo ""
@@ -914,9 +982,58 @@ fi
 ok_inline "Gateway: ${VM_GATEWAY}"
 echo ""
 
+# ─── Extra NICs on different blocks (multi-homed VMs) ────────────────
+# Primary NIC done above; each extra NIC picks its OWN network → resolves
+# THAT pool (same priority: portgroup entry → pinned-host entry → derive) →
+# scans its own free IP. Empty = single-NIC VM.
+EXTRA_NETS=()
+while true; do
+  read -rp "$(echo -e "${CYAN}Add another NIC on a different block?${NC} [y/N]: ")" _xn
+  case "$_xn" in y|Y|yes|YES) ;; *) break ;; esac
+  XNET=""
+  govc_pick "Extra network" "-type n" "" XNET "${NODE_NETWORKS:-}" 0 1 || continue
+  [ -n "$XNET" ] || { warn "no network chosen — skipped"; continue; }
+  XGW=""; XNM=""; XBASE=""; XEND=""
+  if [ -n "${NET_SUBNETS[$XNET]:-}" ]; then
+    _xs="${NET_SUBNETS[$XNET]}"
+    XGW=$(awk -F';' '{for(i=1;i<=NF;i++) if($i~/^gw=/) {sub("^gw=","",$i); print $i}}' <<< "$_xs")
+    XNM=$(awk -F';' '{for(i=1;i<=NF;i++) if($i~/^nm=/) {sub("^nm=","",$i); print $i}}' <<< "$_xs")
+    XBASE=$(awk -F';' '{for(i=1;i<=NF;i++) if($i~/^base=/) {sub("^base=","",$i); print $i}}' <<< "$_xs")
+    XEND=$(awk -F';' '{for(i=1;i<=NF;i++) if($i~/^end=/) {sub("^end=","",$i); print $i}}' <<< "$_xs")
+    info "Extra NIC ${XNET}: pool from network_subnets (gw=${XGW} base=${XBASE:-?})"
+  elif [ -n "${VM_HOST:-}" ] && [ -n "${NET_SUBNETS[$VM_HOST]:-}" ]; then
+    _xs="${NET_SUBNETS[$VM_HOST]}"
+    XGW=$(awk -F';' '{for(i=1;i<=NF;i++) if($i~/^gw=/) {sub("^gw=","",$i); print $i}}' <<< "$_xs")
+    XNM=$(awk -F';' '{for(i=1;i<=NF;i++) if($i~/^nm=/) {sub("^nm=","",$i); print $i}}' <<< "$_xs")
+    XBASE=$(awk -F';' '{for(i=1;i<=NF;i++) if($i~/^base=/) {sub("^base=","",$i); print $i}}' <<< "$_xs")
+    XEND=$(awk -F';' '{for(i=1;i<=NF;i++) if($i~/^end=/) {sub("^end=","",$i); print $i}}' <<< "$_xs")
+    info "Extra NIC ${XNET}: pool from pinned host '${VM_HOST}' entry"
+  else
+    prompt_required XGW "Gateway for '${XNET}' (no entry)" "${DEFAULT_GATEWAY:-}"
+    XNM="${DEFAULT_NETMASK:-24}"
+    XBASE=$(ip_add "$XGW" "$DEFAULT_IPAM_RESERVE")
+    XEND=$(ip_last_usable "$XGW" "$XNM")
+  fi
+  [ -n "$XBASE" ] || XBASE=$(ip_add "${XGW:-$DEFAULT_GATEWAY}" "$DEFAULT_IPAM_RESERVE")
+  XIP=""
+  for _xtry in "$XBASE" "$(echo "$XBASE" | awk -F. '{print $1"."$2"."$3"."$4+1}')"; do
+    _xpay="{\"base_ip\": \"$_xtry\"${XEND:+,\"range_end\": \"$XEND\"}}"
+    _xres=$(echo "$_xpay" | bash "$SCRIPT_DIR/next_free_ip.sh" 2>/dev/null || echo '{"error":"failed"}')
+    XIP=$(echo "$_xres" | jq -r '.free_ip // empty')
+    [ -n "$XIP" ] && break
+  done
+  if [ -z "$XIP" ]; then warn "no free IP on ${XNET} — skipped"; continue; fi
+  ok "Extra NIC: ${XNET} → ${XIP} (gw=${XGW})"
+  EXTRA_NETS+=("${XNET}|${XIP}|${XNM:-24}|${XGW}")
+done
+echo ""
+
+# Template + placement loop: pick a template, verify the pinned node can reach
+# BOTH the target datastore and the template's own datastore; on conflict
+# offer guided fixes (re-pick template / switch datastore / switch node) —
+# never quit the wizard over a fixable pick.
+while true; do
 govc_pick "Template (VM)"      "-type m" "$DEFAULT_TEMPLATE" VM_TEMPLATE
-govc_pick "Resource pool"      "-type p" "$DEFAULT_RESOURCE_POOL" VM_RESOURCE_POOL
-VM_RESOURCE_POOL="${VM_RESOURCE_POOL:-Resources}"
 
 # ---------------------------------------------------------------------------
 # Placement sanity check (fail-fast, BEFORE the config is written).
@@ -953,26 +1070,89 @@ except Exception: print("")')"
     fi
     if [ -n "$_bad" ]; then
       warn "Node ${VM_HOST} can serve: ${_node_ds}"
-      die "Placement conflict: ${_bad} is NOT reachable from pinned node ${VM_HOST} — pick a node that serves it, or a datastore this node has."
+      warn "Placement conflict: ${_bad} is NOT reachable from pinned node ${VM_HOST}."
+      echo "  Fix options:"
+      echo "    1) Pick another template (one stored on: ${_node_ds})"
+      echo "    2) Switch datastore to one ${VM_HOST} serves"
+      # nodes serving everything we need (chosen datastore + template DS)
+      _need=("${VM_DATASTORE}")
+      [ -n "${_tmpl_ds:-}" ] && _need+=("$_tmpl_ds")
+      _good_nodes=()
+      for _n in "${!NODE_DS[@]}"; do
+        _ok=1
+        for _nd in "${_need[@]}"; do
+          case " ${NODE_DS[$_n]} " in *" $_nd "*) ;; *) _ok=0; break ;; esac
+        done
+        [ "$_ok" = 1 ] && [ "$_n" != "$VM_HOST" ] && _good_nodes+=("$_n")
+      done
+      if [ "${#_good_nodes[@]}" -gt 0 ]; then
+        echo "    3) Switch node (serving ${VM_DATASTORE}${_tmpl_ds:+, template DS '$_tmpl_ds'}): ${_good_nodes[*]}"
+      fi
+      echo "    q) Abort (nothing written)"
+      read -rp "  Select [1]: " _fix
+      _fix="${_fix:-1}"
+      case "$_fix" in
+        2)
+          echo "  Datastores on ${VM_HOST}: ${_node_ds}"
+          read -rp "  Type datastore name (Enter = keep ${VM_DATASTORE}): " _dname
+          _dname="${_dname:-$VM_DATASTORE}"
+          case " ${_node_ds} " in
+            *" $_dname "*) VM_DATASTORE="$_dname"; ok_inline "Datastore: ${VM_DATASTORE}" ;;
+            *) warn "Not served by ${VM_HOST} — keeping ${VM_DATASTORE}" ;;
+          esac
+          continue
+          ;;
+        3)
+          if [ "${#_good_nodes[@]}" -eq 0 ]; then warn "No other node serves everything — pick 1 or 2"; continue; fi
+          _i=1; for _n in "${_good_nodes[@]}"; do echo "    $((_i++))) $_n"; done
+          read -rp "  Select node [1]: " _nsel
+          _nsel="${_nsel:-1}"
+          if [[ "$_nsel" =~ ^[0-9]+$ ]] && [ "$_nsel" -ge 1 ] && [ "$_nsel" -le "${#_good_nodes[@]}" ]; then
+            VM_HOST="${_good_nodes[$((_nsel-1))]}"
+            ok_inline "Node: ${VM_HOST}"
+          else
+            warn "Invalid — keeping ${VM_HOST}"
+          fi
+          continue
+          ;;
+        q|Q) echo "Aborted — nothing written."; exit 1 ;;
+        *) continue ;;
+      esac
     fi
   fi
 fi
+break
+done
+
+govc_pick "Resource pool"      "-type p" "$DEFAULT_RESOURCE_POOL" VM_RESOURCE_POOL
+VM_RESOURCE_POOL="${VM_RESOURCE_POOL:-Resources}"
 
 # ===========================================================================
 # 4. Hardware quick-ask (minimal)
 # ===========================================================================
 info "Hardware (defaults OK, edit later)"
-prompt_required VM_CPU    "vCPU"              "$DEFAULT_CPU"
+# Terraform module limits: cpu 1-256, memory 512MB-2TB, disk 10GB-10TB.
+# Validate HERE (re-prompt) so a typo fails in seconds, not at apply.
+while true; do
+  prompt_required VM_CPU    "vCPU (1-256)"              "$DEFAULT_CPU"
+  if [[ "$VM_CPU" =~ ^[0-9]+$ ]] && [ "$VM_CPU" -ge 1 ] && [ "$VM_CPU" -le 256 ]; then break; fi
+  warn "vCPU must be 1-256 (got '${VM_CPU}') — try again."
+done
 ok_inline "CPU: ${VM_CPU} vCPU"
-prompt_required VM_RAM    "RAM (e.g. 4G or 4)"  "$DEFAULT_RAM"
-ok_inline "RAM: ${VM_RAM}"
+while true; do
+  prompt_required VM_RAM    "RAM in GB (e.g. 4, or 4096M for MB)"  "$DEFAULT_RAM"
+  VM_RAM_MB=$(to_mb "$VM_RAM")
+  if [[ "$VM_RAM_MB" =~ ^[0-9]+$ ]] && [ "$VM_RAM_MB" -ge 512 ] && [ "$VM_RAM_MB" -le 2097152 ]; then break; fi
+  warn "RAM must be 512MB-2TB (bare number = GB, so '4096' = 4TB!). Got '${VM_RAM}' → ${VM_RAM_MB}MB — try again."
+done
+VM_RAM="$VM_RAM_MB"
+ok_inline "RAM: ${VM_RAM} MB"
 prompt_optional VM_FIRM   "Firmware"          "$DEFAULT_FIRMWARE"
 ok_inline "Firmware: ${VM_FIRM}"
 confirm "CPU hot-add?" "$DEFAULT_CPU_HOT_ADD" && CPU_HOT=true || CPU_HOT=false
 ok_inline "CPU hot-add: ${CPU_HOT}"
 confirm "RAM hot-add?" "$DEFAULT_MEM_HOT_ADD" && MEM_HOT=true || MEM_HOT=false
 ok_inline "RAM hot-add: ${MEM_HOT}"
-VM_RAM=$(to_mb  "$VM_RAM")
 
 # Swap suggestion
 ram_gb=$(( VM_RAM / 1024 ))
@@ -1122,8 +1302,8 @@ while true; do
   [ "${VM_DISK,,}" = "b" ] && info "Restarting partition selection..." && continue 2
   VM_DISK="${VM_DISK:-$min_disk}"
   VM_DISK=$(to_gb "$VM_DISK")
-  [ "$VM_DISK" -ge "$min_disk" ] && break
-  warn "OS disk must be at least ${min_disk} GB (got ${VM_DISK})"
+  if [ "$VM_DISK" -ge "$min_disk" ] && [ "$VM_DISK" -le 10000 ]; then break; fi
+  warn "OS disk must be ${min_disk}-10000 GB (got ${VM_DISK})"
 done
 ok "OS disk: ${VM_DISK} GB"
 break  # exit outer loop
@@ -1266,6 +1446,8 @@ fi
 # ===========================================================================
 DEFAULT_KEY=""
 for f in ~/.ssh/id_*.pub; do [ -f "$f" ] && DEFAULT_KEY="$(cat "$f")" && break; done
+# vm-defaults.conf wins when set (empty = auto-detect above / paste below)
+[ -n "${DEFAULT_SSH_KEY:-}" ] && DEFAULT_KEY="$DEFAULT_SSH_KEY"
 if [ -n "$DEFAULT_KEY" ]; then
   ok "Key found: ${DEFAULT_KEY::50}..."
   confirm "Use this key?" "Y" && SSH_KEY="$DEFAULT_KEY" || SSH_KEY=""
@@ -1276,10 +1458,10 @@ echo ""
 # ===========================================================================
 # 6. Additional users (created via cloud-init)
 # ===========================================================================
-# Load user-group policy (secure/<vc>/<env>/user-groups.tfvars) so the wizard
+# Load user-group policy (secure/<srv>/<vc>/<env>/user-groups.tfvars) so the wizard
 # can offer the groups that actually exist in this environment.
 USER_GROUP_KEYS=()
-GROUPS_FILE="${SCRIPT_DIR}/../secure/${VCENTER}/${ENV}/user-groups.tfvars"
+GROUPS_FILE="${SEC_VDIR}/${ENV}/user-groups.tfvars"
 if [ -f "$GROUPS_FILE" ]; then
   # Only TOP-LEVEL group keys are valid — a line `name = {` at column 0 inside
   # the user_groups block. Nested keys (os_groups/sudo/shell/description), the
@@ -1294,7 +1476,7 @@ fi
 EXTRA_USERS=()
 info "Additional OS users (create VM owner accounts)"
 if [ -n "${DEFAULT_EXTRA_USER_PASSWORD}" ]; then
-  echo "  Default password: ${DEFAULT_EXTRA_USER_PASSWORD} (from secure/${VCENTER}/vm-defaults.conf — user must change on first login)"
+  echo "  Default password: ${DEFAULT_EXTRA_USER_PASSWORD} (from ${SEC_REL}/vm-defaults.conf — user must change on first login)"
 else
   echo "  No default password set — accounts are SSH-key only (recommended)"
 fi
@@ -1423,6 +1605,24 @@ if [ ${#EXTRA_USERS[@]} -gt 0 ]; then
 else
   EXTRA_USERS_BLOCK="[]"
 fi
+# Extra NICs block (real when the loop above collected any, else commented hint).
+if [ "${#EXTRA_NETS[@]}" -gt 0 ]; then
+  XN_LINES=()
+  _xi=0
+  for _xe in "${EXTRA_NETS[@]}"; do
+    IFS='|' read -r _xn _xi _xnm _xgw <<<"$_xe"
+    # predictable ens names: primary ens192, extras ens224/ens256/... (PCI order)
+    _xmatch="ens$((192 + (_xi + 1) * 32))"
+    XN_LINES+=("  { network_name = \"${_xn}\", ip_address = \"${_xi}\", netmask = ${_xnm}, gateway = \"${_xgw}\", dhcp = false, match_name = \"${_xmatch}\" },")
+    _xi=$((_xi + 1))
+  done
+  printf -v EXTRA_NETS_BLOCK "    extra_networks = [\n%s\n    ]" "$(IFS=$'\n'; echo "${XN_LINES[*]}")"
+else
+  EXTRA_NETS_BLOCK="    # Add a second NIC:
+    # extra_networks = [
+    #   { network_name = \"VM Network\", ip_address = \"198.51.100.20\", netmask = 24 }
+    # ]"
+fi
 
 # ===========================================================================
 # 7. Generate new VM entry HCL block
@@ -1464,10 +1664,7 @@ generate_vm_entry() {
     # wait_for_guest_net_timeout = 300                               # secs before giving up on guest IP
     # enable_node_exporter       = true                              # prometheus node_exporter
     #
-    # Add a second NIC:
-    # extra_networks = [
-    #   { network_name = "VM Network", ip_address = "198.51.100.20", netmask = 24 }
-    # ]
+${EXTRA_NETS_BLOCK}
     #
     # Add extra data disks (each = new VMDK on the datastore):
     # data_disks = [
@@ -1487,7 +1684,7 @@ generate_vm_entry() {
     # ]
     #
     # Extra users (password optional — blank = SSH key only; groups from
-    # secure/<vc>/<env>/user-groups.tfvars — admin/app/db/readonly, one or more):
+    # secure/<srv>/<vc>/<env>/user-groups.tfvars — admin/app/db/readonly, one or more):
     # extra_users = [
     #   { username = "devops", groups = ["app"], password = "" }
     #   { username = "rakib",  groups = ["app", "db"], password = "" }
@@ -1497,8 +1694,24 @@ ENTRY
 }
 
 # ===========================================================================
-# 8. Per-VM config file (deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars)
+# 8. Per-VM config file (deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars)
 # ===========================================================================
+# ─── IPAM finalize under lock (close the scan→write race) ────────────────
+# The scan above ran minutes ago (interactive wizard in between) — another run
+# may have claimed FREE_IP since. Hold .ipam.lock (fail fast if held), re-verify
+# against all tfvars, rescan once under lock if taken. The final write below
+# uses noclobber: if the file appeared in the micro-window after unlock, the
+# write FAILS LOUDLY instead of silently duplicating an IP (fail-closed).
+(
+  flock -n 9 || die "IPAM lock busy: another create is writing in ${ENV} — wait a few seconds and retry"
+  if grep -rqE "ip_address[[:space:]]*=[[:space:]]*\"${FREE_IP}\"" "${ENV_DIR}"/vm-*.tfvars 2>/dev/null; then
+    warn "IP ${FREE_IP} was claimed while you configured — rescanning under lock"
+    _re=$(echo "{\"base_ip\": \"${FREE_IP}\",\"range_end\": \"${RANGE_END:-}\"}" | bash "$SCRIPT_DIR/next_free_ip.sh" 2>/dev/null || echo '{"error":"failed"}')
+    FREE_IP=$(echo "$_re" | jq -r '.free_ip // empty')
+    [ -n "$FREE_IP" ] || die "no free IP available in ${ENV} — free one and retry"
+    ok "Re-selected: ${FREE_IP}"
+  fi
+) 9>"${ENV_DIR}/.ipam.lock"
 CONFIG_FILE="${ENV_DIR}/vm-${VM_NAME}_${FREE_IP}.tfvars"
 
 # Each tree line is both printed to the console and collected into TREE_BLOCK
@@ -1597,31 +1810,53 @@ NEW_ENTRY=$(generate_vm_entry \
   "$FREE_IP" "$VM_GATEWAY" "$OS_PARTS_BLOCK" "$DATA_DISKS_BLOCK" \
   "$LVM_CONFIG_BLOCK" "$MOUNT_BLOCK" "$EXTRA_USERS_BLOCK" "$DISABLE_AUTO_UPDATES")
 
+# LAN mode: VMs boot with the NIC cable DISCONNECTED (fast boot — nothing
+# waits on the network). TWO one-time template prerequisites in vCenter:
+#   1. template NIC "Connect at power on" = OFF (else clones boot WITH lan)
+#   2. lvm2 + cloud-guest-utils PREINSTALLED in the template (first boot is
+#      offline, so cloud-init's apt installs can't fetch them — without these
+#      the LVM expand fails; lan_up detects + tells how to repair).
+# auto = deploy connects NICs + waits IP at the end (default);
+# manual = stays disconnected until: deploy-vm.sh <vc> <env> <name> --lan-up.
+if confirm "Connect LAN automatically after boot? (N = leave disconnected, up later)" "Y"; then
+  LAN_MODE="auto"
+  LAN_FLAG=""
+  LAN_NOTE="auto (deploy connects NICs + waits IP at the end)"
+else
+  LAN_MODE="manual"
+  LAN_FLAG=" --no-lan"
+  LAN_NOTE="manual (stays disconnected; up later: bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME} --lan-up)"
+fi
+ok_inline "LAN: ${LAN_NOTE}"
+
+# noclobber: fail-closed if a rival run created this file after our lock check.
+set -o noclobber
 cat > "$CONFIG_FILE" <<PERVM
 #############################################################
 # VM config — ${VM_NAME} (${FREE_IP})
 # vCenter: ${VCENTER}   Env: ${ENV}
 # Generated: $(date '+%Y-%m-%d %H:%M:%S')
+# LAN: ${LAN_NOTE}
 #
 # HOW TO USE
 # ───────────────────────────────────────────────────────────
 # Deploy this VM only (other VMs untouched):
-#   bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME}
+#   bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME}${LAN_FLAG}
 #   bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME} --plan   # preview first
 #
 # Destroy (safe — explicit, nothing disappears by accident):
 #   bash scripts/destroy.sh ${VCENTER} ${ENV} ${VM_NAME} --plan     # preview
 #   bash scripts/destroy.sh ${VCENTER} ${ENV} ${VM_NAME} --yes      # destroy
 #
-# Reconcile ALL VMs in this env with the deploy/<vcenter>/<env>/*.tfvars files
+# Reconcile ALL VMs in this env with the deploy/<server>/<vcenter>/<env>/*.tfvars files
 # (applies plan-only drift shows, destroys only state-tracked VMs that are gone):
 #   bash scripts/deploy-sync.sh ${VCENTER} ${ENV} --plan
 #   bash scripts/deploy-sync.sh ${VCENTER} ${ENV}
 #
 # Manually, from the terraform dir:
 #   cd terraform
-#   terraform plan   -state=terraform.${VCENTER}.${ENV}.tfstate -var-file="../deploy/${VCENTER}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars" -target='module.vm["${VM_NAME}"]'
-#   terraform apply  -state=terraform.${VCENTER}.${ENV}.tfstate -var-file="../deploy/${VCENTER}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars" -target='module.vm["${VM_NAME}"]'
+#   terraform plan   -state=terraform.${VCENTER}.${ENV}.tfstate -var-file="../${NDEP}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars" -target='module.vm["${VM_NAME}"]'
+#   terraform apply  -state=terraform.${VCENTER}.${ENV}.tfstate -var-file="../${NDEP}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars" -target='module.vm["${VM_NAME}"]'
 #
 # Git note: this file is gitignored (deploy/*/*/vm-*.tfvars).
 # Its values (inventory, SSH key, IPs) are NOT pushed to GitHub.
@@ -1654,15 +1889,16 @@ vm_configs = {
 ${NEW_ENTRY}
 }
 PERVM
+set +o noclobber
 ok "Created ${CONFIG_FILE}"
 
 echo ""
 info "Deploy this VM with:"
-echo "  bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME}"
+echo "  bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME}${LAN_FLAG}"
 echo "  # or manually:"
 echo "  cd terraform"
-echo "  terraform plan   -state=terraform.${VCENTER}.${ENV}.tfstate -var-file=\"../deploy/${VCENTER}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars\" -target='module.vm[\"${VM_NAME}\"]'"
-echo "  terraform apply  -state=terraform.${VCENTER}.${ENV}.tfstate -var-file=\"../deploy/${VCENTER}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars\" -target='module.vm[\"${VM_NAME}\"]'"
+echo "  terraform plan   -state=terraform.${VCENTER}.${ENV}.tfstate -var-file=\"../${NDEP}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars\" -target='module.vm[\"${VM_NAME}\"]'"
+echo "  terraform apply  -state=terraform.${VCENTER}.${ENV}.tfstate -var-file=\"../${NDEP}/${ENV}/vm-${VM_NAME}_${FREE_IP}.tfvars\" -target='module.vm[\"${VM_NAME}\"]'"
 
 show_os_tree() {
   local os_total="$1"
@@ -1729,7 +1965,7 @@ show_data_tree() {
 # Auto-decrypt credentials so terraform works immediately
 DECRYPT_SCRIPT="${SCRIPT_DIR}/sops-decrypt.sh"
 if [ -f "$DECRYPT_SCRIPT" ]; then
-  bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" 2>/dev/null && ok "Credentials decrypted → terraform/${VCENTER}/${ENV} ready" || warn "sops-decrypt failed — run manually later"
+  bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" 2>/dev/null && ok "Credentials decrypted → terraform/*.auto.tfvars ready" || warn "sops-decrypt failed — run manually later"
 fi
 
 # Done
