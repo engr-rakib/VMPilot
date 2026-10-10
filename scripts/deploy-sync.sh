@@ -126,12 +126,15 @@ for vm in $(tracked_vm); do
             "module.vm[\"${vm}\"].vsphere_virtual_machine.this" \
             "data.external.next_free_ip[\"${vm}\"]" \
             >/dev/null 2>&1 || true
+          pstep deploy-sync vm-untrack done "${vm}"
         else
           info "R5 (dry-run): VM '${vm}' not in vCenter and has no config — would remove from state."
+          pstep deploy-sync vm-untrack skip "${vm}"
         fi
         MISSING_CFG=1
       elif [ -n "$VCENTER_VMS" ]; then
         warn "R5: VM '${vm}' is in state + vCenter but has no config file — recreate its config or run destroy."
+        pstep deploy-sync vm-orphan skip "${vm}"
       fi
     fi
   fi
@@ -178,9 +181,11 @@ for host in "${!CFG_KEY[@]}"; do
     # record it and continue; the summary below fails loudly instead.
     if bash "${SCRIPT_DIR}/deploy-vm.sh" "$VCENTER" "$ENV" "$host"; then
       rm -f "${ENV_DIR}/.hardening-${host}.failed" 2>/dev/null || true
+      pstep deploy-sync vm-deploy done "${host}"
     else
       _drc=$?
       warn "deploy failed for ${host} (rc=${_drc}) — continuing with remaining VMs"
+      pstep deploy-sync vm-deploy fail "${host}-rc=${_drc}"
       FAILED="${FAILED} ${host}(rc=${_drc})"
       FAILED_N=$((FAILED_N + 1))
     fi

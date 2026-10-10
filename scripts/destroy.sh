@@ -109,6 +109,7 @@ if [ "$MODE" = "plan" ]; then
   echo "  3. govc vm.destroy \"${VM_NAME}\" in vCenter"
   [ -n "$CONFIG_FILE" ] && [ "$KEEP_CONFIG" = false ] && echo "  4. Delete config file: ${CONFIG_FILE#${ROOT_DIR}/}"
   echo ""
+  pstep destroy pipeline skip "plan-mode"
   exit 0
 fi
 
@@ -118,6 +119,7 @@ if [ "$ASSUME_YES" = false ]; then
   read -rp "$(echo -e "${YELLOW}Type DESTROY to confirm: ${NC}")" ack
   if [ "$ack" != "DESTROY" ]; then
     info "Cancelled."
+    pstep destroy pipeline skip "cancelled"
     exit 0
   fi
   [ -n "$CONFIG_FILE" ] && [ "$KEEP_CONFIG" = false ] && \
@@ -191,6 +193,8 @@ if [ -n "${GOVC_URL:-}" ] && [ -n "${GOVC_USERNAME:-}" ] && [ -n "${GOVC_PASSWOR
   pstep destroy vcenter-destroy done
 else
   warn "Skipping govc destroy — credentials unavailable."
+  pstep destroy vcenter-destroy skip "no-creds"
+  pstep destroy vcenter-destroy skip "no-creds"
 fi
 
 # ─── Step 3: remove the per-VM config file (unless kept) ──────────────────
@@ -200,6 +204,8 @@ if [ -n "$CONFIG_FILE" ] && [ "$KEEP_CONFIG" = false ]; then
   pstep destroy config-delete done
 elif [ -n "$CONFIG_FILE" ]; then
   warn "Config kept: ${CONFIG_FILE#${ROOT_DIR}/} — deploy-sync will redeploy it (R1)."
+  pstep destroy config-delete skip "kept"
+  pstep destroy config-delete skip "kept"
 fi
 
 echo ""

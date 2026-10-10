@@ -163,6 +163,7 @@ while true; do
 done
 VM_NAME="${VM_NAME//_/-}"
 ok_inline "Name: ${VM_NAME}"
+pstep create-vm-config identity done "${VM_NAME}"
 
 # vCenter + environment
 # Layout: deploy/<server>/<vcenter>/<env>/vm-*.tfvars ; creds/inventory in secure/<server>/<vcenter>/.
@@ -949,6 +950,7 @@ until valid_ipv4 "$BASE_IP"; do
 done
 ok_inline "Scan from: ${BASE_IP}"
 [ -n "${RANGE_END:-}" ] && ok_inline "Block ends at: ${RANGE_END}"
+pstep create-vm-config resources done "${NET_PORT_GROUP:-default}"
 echo ""
 
 # ===========================================================================
@@ -1442,6 +1444,7 @@ if confirm "  Add a data disk?" "$DEFAULT_DATA_DISK"; then
 else
   info "No data disk — commented template left in config for later use"
 fi
+pstep create-vm-config hardware done "${VM_CPU}c-${VM_RAM}MB"
 
 # ===========================================================================
 # 5. SSH key

@@ -288,7 +288,7 @@ apply_policy_resync() {
     fi
   fi
 
-  [ "${#CHANGES[@]}" -eq 0 ] && return 0
+  if [ "${#CHANGES[@]}" -eq 0 ]; then pstep deploy-vm resync skip "in-policy"; return 0; fi
 
   echo ""
   warn "vm-${VM_NAME} config is out of policy ($(vdir_for secure "$VCENTER")/${ENV}/vcenter.tfvars):"
@@ -297,6 +297,7 @@ apply_policy_resync() {
   if [ "$RESYNC" = "plan" ]; then
     info "  [--plan] not applying — run without --plan to re-sync and deploy."
     echo ""
+    pstep deploy-vm resync skip "plan-mode"
     return 0
   fi
 
@@ -348,9 +349,11 @@ apply_policy_resync() {
      && [ "$(grep -cE '^\}$' "$tmp" || true)" = "1" ]; then
     mv "$tmp" "$CONFIG_FILE"
     ok "Policy applied → $(basename "$CONFIG_FILE") (VM-owned keys untouched)"
+    pstep deploy-vm resync done
   else
     err "Re-sync produced an invalid file — NOT applied. Fix $(vdir_for secure "$VCENTER")/${ENV}/vcenter.tfvars."
     rm -f "$tmp"
+    pstep deploy-vm resync fail "invalid-file"
   fi
   echo ""
 }
@@ -596,6 +599,7 @@ lan_up() {
       # (WebUI jobs display shows these — per-step PASS/FAIL/SKIP).
       echo "  --- hardening pipeline checks (${VM_NAME}) ---"
       ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "grep -h '^CHECK ' /var/log/vmpilot-hardening.log 2>/dev/null | tail -20" 2>/dev/null | sed 's/^/  /' || true
+      pstep deploy-vm checks done
     else
       warn "hardening unreachable/failed (SSH key?) — run manually: sudo bash /etc/vmpilot/hardening.sh"
       # Host-side status marker: the VM exists but is UNHARDENED. deploy-sync
@@ -681,6 +685,7 @@ if [ "$MODE" = "plan" ]; then
   terraform -chdir="$TF_DIR" plan \
     -state="${STATE_FILE}" \
     -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}"
+  pstep deploy-vm plan done
 else
   info "Applying: ${VM_NAME}"
   pstep deploy-vm apply start
@@ -724,6 +729,7 @@ else
       mv "$CONFIG_FILE" "$NEW_FILE"
       info "Config file renamed: ${BASE} → ${EXPECTED}"
       CONFIG_FILE="$NEW_FILE"
+      pstep deploy-vm config-rename done "${EXPECTED}"
     fi
   fi
   # LAN up LAST (fast boot happened disconnected): connect NICs + wait IPv4.
@@ -731,6 +737,7 @@ else
   # CI/jobs/sync treat this as failure so unhardened VMs never pass silent.
   if [ "$NO_LAN" = true ]; then
     info "LAN left disconnected (--no-lan) — bring it up later: bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME} --lan-up"
+    pstep deploy-vm pipeline skip "no-lan"
   else
     if lan_up; then
       ok "LAN + hardening complete: ${VM_NAME}"
