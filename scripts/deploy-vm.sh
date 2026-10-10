@@ -19,19 +19,21 @@ set -euo pipefail
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name>          # apply (auto-approve)
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --plan   # plan only
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --no-sync  # skip policy re-sync
+#   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --no-lan   # leave NICs disconnected
+#   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --lan-up   # connect NICs + wait IP only
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --no-clean  # keep decrypted .auto.tfvars
 #
 #   Example:
 #     ./scripts/deploy-vm.sh dc_pilot_192.0.2.10 dev web-02
 #
 #   Policy re-sync (default ON): before deploying, the target config is compared
-#   against secure/<vcenter>/vcenter.tfvars + secure/<vcenter>/<env>/vcenter.tfvars.
+#   against secure/<server>/<vcenter>/vcenter.tfvars + secure/<server>/<vcenter>/<env>/vcenter.tfvars.
 #   If a key set in those files differs from the per-VM file, the policy value
 #   is applied (VM-owned keys — hostname/ip/cpu/ram/disks/partitions/ssh — are
 #   never touched). --plan previews the drift; --no-sync deploys the file as-is.
 #
 #   How it works:
-#     1. Finds deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars for the requested VM.
+#     1. Finds deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars for the requested VM.
 #        (filename shows hostname + IP at a glance)
 #     2. Assembles a temporary combined config (top-level vars from this
 #        VM's file + the vm_configs entry of EVERY per-VM file in THIS env).
@@ -63,31 +65,39 @@ MODE="apply"
 KEEP_CREDS=false
 
 if [ -z "$VCENTER" ] || [ -z "$ENV" ] || [ -z "$VM_NAME" ]; then
-  echo "Usage: $0 <vcenter> <env> <vm-name> [--plan|--no-clean]"
+  echo "Usage: $0 <vcenter> <env> <vm-name> [--plan|--no-clean|--no-sync|--no-lan|--lan-up]"
   echo "  $0 dc_pilot_192.0.2.10 dev web-02"
   exit 1
 fi
 shift 3
 RESYNC="auto"   # auto (apply policy on drift) | plan (preview) | off
+LANUP_ONLY=false  # --lan-up: skip terraform, just connect NICs + wait IP
+NO_LAN=false      # --no-lan: deploy but leave NICs disconnected (LAN up later)
 for arg in "$@"; do
   case "$arg" in
     --plan)       MODE="plan"; RESYNC="plan" ;;
     --no-clean)   KEEP_CREDS=true ;;
     --no-sync)    RESYNC="off" ;;
+    --lan-up)     LANUP_ONLY=true ;;
+    --no-lan)     NO_LAN=true ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
 
 TF_DIR="${ROOT_DIR}/terraform"
-ENV_DIR="${ROOT_DIR}/deploy/${VCENTER}/${ENV}"
+# Nested layout: secure/<srv>/<vc>/ + deploy/<srv>/<vc>/ (tolerant reads).
+vdir_for() {
+  local _r="${ROOT_DIR:-.}"; if [ -d "${_r}/$1/${2##*_}/$2" ]; then echo "$1/${2##*_}/$2"; else echo "$1/$2"; fi
+}
+ENV_DIR="${ROOT_DIR}/$(vdir_for deploy "$VCENTER")/${ENV}"
 CONFIG_FILE=""
 for f in "${ENV_DIR}"/vm-${VM_NAME}_*.tfvars; do
   [ -f "$f" ] && CONFIG_FILE="$f"
 done
 
 if [ -z "$CONFIG_FILE" ]; then
-  error "No config file found for '${VM_NAME}' in deploy/${VCENTER}/${ENV}/"
-  echo "  Expected: deploy/${VCENTER}/${ENV}/vm-${VM_NAME}_<ip>.tfvars"
+  error "No config file found for '${VM_NAME}' in $(vdir_for deploy "$VCENTER")/${ENV}/"
+  echo "  Expected: $(vdir_for deploy "$VCENTER")/${ENV}/vm-${VM_NAME}_<ip>.tfvars"
   echo "  Generate one with: ./scripts/create-vm-config.sh ${VCENTER} ${ENV} ${VM_NAME}"
   exit 1
 fi
@@ -113,19 +123,19 @@ fi
 
 # ─── Deploy-time policy re-sync ───────────────────────────────────────────
 # Single source of truth for placement decisions:
-#   secure/<vc>/vcenter.tfvars       (top-level policy)
-#   secure/<vc>/<env>/vcenter.tfvars (per-env override — WINS)
+#   secure/<srv>/<vc>/vcenter.tfvars       (top-level policy)
+#   secure/<srv>/<vc>/<env>/vcenter.tfvars (per-env override — WINS)
 # At deploy time we re-apply current policy onto the per-VM file so a change
 # to the common file propagates to existing VMs automatically (no per-VM edit).
 # VM-owned keys (hostname/ip/cpu/ram/disks/partitions/ssh/annotation + the
 # filename) are NEVER touched. Keys the policy files don't set are left alone.
 POLICY_VAL=""; declare -A POLICY_DATA=()
-# POLICY = ONLY the per-env file (secure/<vc>/<env>/vcenter.tfvars). The
-# top-level secure/<vc>/vcenter.tfvars is INVENTORY (defaults + network_subnets
+# POLICY = ONLY the per-env file (secure/<srv>/<vc>/<env>/vcenter.tfvars). The
+# top-level secure/<srv>/<vc>/vcenter.tfvars is INVENTORY (defaults + network_subnets
 # the create-wizard reads); it is NOT policy and is never force-applied here.
-# Per-env policy is applied to every VM config in deploy/<vc>/<env>.
+# Per-env policy is applied to every VM config in deploy/<srv>/<vc>/<env>.
 load_policy_files() {
-  local _e="${ROOT_DIR}/secure/${VCENTER}/${ENV}/vcenter.tfvars"
+  local _e="${ROOT_DIR}/$(vdir_for secure "$VCENTER")/${ENV}/vcenter.tfvars"
   [ -f "$_e" ] && read_policy_file "$_e"
 }
 read_policy_file() {
@@ -167,7 +177,7 @@ policy_get() {  # policy_get media_key → value or ""
 # vCenter-wide DEFAULT and must NOT be force-applied onto it.
 POLICY_SUBNET_KEYS=""
 load_policy_subnet_keys() {
-  local _e="${ROOT_DIR}/secure/${VCENTER}/${ENV}/vcenter.tfvars"
+  local _e="${ROOT_DIR}/$(vdir_for secure "$VCENTER")/${ENV}/vcenter.tfvars"
   POLICY_SUBNET_KEYS=""
   [ -f "$_e" ] || return 0
   while IFS= read -r _line; do
@@ -278,7 +288,7 @@ apply_policy_resync() {
   [ "${#CHANGES[@]}" -eq 0 ] && return 0
 
   echo ""
-  warn "vm-${VM_NAME} config is out of policy (secure/${VCENTER}/${ENV}/vcenter.tfvars):"
+  warn "vm-${VM_NAME} config is out of policy ($(vdir_for secure "$VCENTER")/${ENV}/vcenter.tfvars):"
   for c in "${CHANGES[@]}"; do echo "    $c"; done
 
   if [ "$RESYNC" = "plan" ]; then
@@ -336,18 +346,49 @@ apply_policy_resync() {
     mv "$tmp" "$CONFIG_FILE"
     ok "Policy applied → $(basename "$CONFIG_FILE") (VM-owned keys untouched)"
   else
-    err "Re-sync produced an invalid file — NOT applied. Fix secure/${VCENTER}/${ENV}/vcenter.tfvars."
+    err "Re-sync produced an invalid file — NOT applied. Fix $(vdir_for secure "$VCENTER")/${ENV}/vcenter.tfvars."
     rm -f "$tmp"
   fi
   echo ""
 }
 
-if [ "$RESYNC" != "off" ] && [ -d "${ROOT_DIR}/secure/${VCENTER}" ]; then
+if [ "$RESYNC" != "off" ] && [ -d "${ROOT_DIR}/$(vdir_for secure "$VCENTER")" ]; then
   apply_policy_resync
 fi
 
 # ─── Assemble combined config (all VMs of THIS env present) ─────────────
 # Header + top-level vars come from the target VM's file (vCenter-shared).
+# ─── Hardening profile (3-tier policy) ────────────────────────────────────
+# Tier 1 template (binaries) + Tier 2 DC baseline
+# (secure/<srv>/<vc>/hardening.tfvars) + Tier 3 env overwrite
+# (secure/<srv>/<vc>/<env>/hardening.tfvars, per-KEY win). Unset keys fall
+# back to module defaults. prod env guardrails are ENFORCED below.
+# (operator hardening scripts concatenate below — no backend mapping.)
+
+# Hardening script (operator-owned, verbatim): DC baseline
+# (secure/<srv>/<vc>/hardening.sh) + env extras
+# (secure/<srv>/<vc>/<env>/hardening.sh) appended in order. `${` escaped to
+# `$${` so the terraform heredoc renders it back untouched.
+build_hardening_script() {
+  local _d="${ROOT_DIR}/$(vdir_for secure "$VCENTER")" _f _content=""
+  # DC file always applies when present; env file applies ONLY when it
+  # differs (a fresh env seed is byte-identical to the DC file — running both
+  # would duplicate every step).
+  for _f in "${_d}/hardening.sh" "${_d}/${ENV}/hardening.sh"; do
+    [ -f "$_f" ] || continue
+    if [ "$_f" != "${_d}/hardening.sh" ] && cmp -s "$_f" "${_d}/hardening.sh"; then continue; fi
+    # inactive policy (comments/blank only) contributes nothing — skip loudly.
+    # NOTE: info goes to STDERR here: this builder runs inside the
+    # `{ ... } > COMBINED` group, so stdout would corrupt the tfvars file.
+    if ! grep -qEv "^[[:space:]]*(#|$)" "$_f"; then info "hardening ${_f#${ROOT_DIR}/}: inactive - skipped" >&2; continue; fi
+    # per-file ON/OFF switch: ENABLED=false short-circuits the whole file —
+    # evaluate per file (DC and env decide independently).
+    if grep -qE "^ENABLED=" "$_f" && ! grep -qE "^ENABLED=\"true\"" "$_f"; then info "hardening ${_f#${ROOT_DIR}/}: DISABLED by switch - skipped" >&2; continue; fi
+    _content+="$(cat "$_f")"$'\n'
+  done
+  printf 'hardening_script = <<EOT_HARDEN\n%s\nEOT_HARDEN\n' "$(printf '%s' "$_content" | sed 's/\${/$${/g')"
+}
+
 # Then merge the vm_configs entry of EVERY per-VM file in THIS env only.
 # Each vCenter+env has its OWN Terraform state
 # (terraform/terraform.<vcenter>.<env>.tfstate), so other envs' VMs
@@ -377,6 +418,8 @@ COMBINED="${ENV_DIR}/.deploy-combined.tfvars"
     sed -n '/^vm_configs = {$/,/^}$/p' "$f" | tail -n +2 | head -n -1
   done
   echo "}"
+  # operator hardening script (DC + env concatenated, terraform-escaped)
+  build_hardening_script
 } > "$COMBINED"
 
 N=$(grep -cE '^[[:space:]]+[a-zA-Z0-9_-]+ = \{' "$COMBINED" || true)
@@ -391,9 +434,182 @@ done
 echo "  ${VCENTER}/${ENV}: ${VM_LIST:-<none>}"
 echo "  --> targeting ONLY: ${VM_NAME}"
 
+# ─── LAN up (last step) ───────────────────────────────────────────────────
+# VMs boot with the NIC cable DISCONNECTED (fast boot: nothing waits on the
+# network — needs the template's "Connect at power on" OFF, one-time vCenter
+# step). LAN goes up ONLY when the guest is fully ready: power on + VMware
+# Tools running (checked via govc, no network needed) → connect every
+# ethernet NIC → wait guest IPv4 → confirm cloud-init done over SSH.
+# Auto-runs after apply; --no-lan skips it; --lan-up runs ONLY this.
+lan_up() {
+  local _tf="${ROOT_DIR}/terraform/credentials.auto.tfvars"
+  [ -f "$_tf" ] || { warn "no decrypted creds (${_tf}) — run sops-decrypt first"; return 1; }
+  command -v govc >/dev/null || { warn "govc missing — connect NICs by hand in vCenter"; return 1; }
+  command -v jq >/dev/null || { warn "jq missing — connect NICs by hand in vCenter"; return 1; }
+  export GOVC_URL="$(grep -oP 'vsphere_server\s*=\s*"\K[^"]+' "$_tf" | head -1)"
+  export GOVC_USERNAME="$(grep -oP 'vsphere_user\s*=\s*"\K[^"]+' "$_tf" | head -1)"
+  export GOVC_PASSWORD="$(grep -oP 'vsphere_password\s*=\s*"\K[^"]+' "$_tf" | head -1)"
+  export GOVC_INSECURE=true GOVC_PERSIST_SESSION=false TERM=dumb
+  export GOVC_DATACENTER="$(cfg_topval datacenter)"
+  # Phase 1: guest fully ready = powered on + Tools running (no network needed
+  # for this check — govc talks to the host, not the guest).
+  info "LAN: waiting for ${VM_NAME} to be fully ready (power + Tools)…"
+  local _i=0 _st=""
+  while [ "$_i" -lt 120 ]; do
+    _st=$(govc vm.info -json "$VM_NAME" 2>/dev/null \
+      | jq -r '[.virtualMachines[]? | "\(.runtime.powerState)/\(.guest.toolsStatus // "none")" ] | join(",")' 2>/dev/null || true)
+    case "$_st" in
+      *poweredOn/toolsOk*|*poweredOn/toolsOld*) break ;;
+    esac
+    sleep 5; _i=$((_i+1))
+  done
+  case "$_st" in
+    *poweredOn/toolsOk*|*poweredOn/toolsOld*) ok "Guest ready: ${VM_NAME} (${_st})" ;;
+    *) warn "guest not ready yet (${_st:-unknown}) — connecting LAN anyway (check VM console if IP never appears)" ;;
+  esac
+  # Phase 1b: ALL offline OS work complete? An offline first boot ends with
+  # a clean poweroff (last runcmd step — power state is the signal, no guest
+  # writes needed). Online boots never power off: they get an IP instead.
+  # Poll BOTH: poweredOff → connect + power on; IPv4 present → normal flow.
+  # (--lan-up skips this gate: the operator explicitly asks for connect NOW.)
+  if [ "${LANUP_SKIP_GATE:-false}" != true ]; then
+  info "LAN: waiting for OS installation to complete…"
+  _i=0 _st="" _ip="" _mode=""
+  while [ "$_i" -lt 180 ]; do
+    _st=$(govc vm.info -json "$VM_NAME" 2>/dev/null \
+      | jq -r '.virtualMachines[0].runtime.powerState // empty' 2>/dev/null || true)
+    if [ "$_st" = "poweredOff" ]; then _mode="offline"; break; fi
+    _ip=$(govc vm.ip -v4 "$VM_NAME" 2>/dev/null || true)
+    if [ -n "$_ip" ]; then _mode="online"; break; fi
+    sleep 5; _i=$((_i+1))
+  done
+  if [ "$_mode" = "offline" ]; then
+    ok "OS installation complete (powered off clean) — bringing LAN up"
+  elif [ "$_mode" = "online" ]; then
+    info "guest already has IP ${_ip} (online boot) — ensuring LAN connected"
+  else
+    warn "no clean signal after 15 min (power=${_st:-unknown}, ip=${_ip:-none}) — connecting LAN anyway"
+  fi
+  fi
+  local _nics _n
+  _nics=$(govc device.info -vm "$VM_NAME" -json 2>/dev/null \
+    | jq -r '.devices[]? | select(.name // "" | startswith("ethernet-")) | .name' 2>/dev/null || true)
+  [ -z "$_nics" ] && _nics=$(govc device.ls -vm "$VM_NAME" 2>/dev/null | grep -oE 'ethernet-[0-9]+' || true)
+  [ -n "$_nics" ] || { warn "no NICs found on ${VM_NAME}"; unset GOVC_PASSWORD; return 1; }
+  for _n in $_nics; do
+    if govc device.connect -vm "$VM_NAME" "$_n" >/dev/null 2>&1; then
+      ok "LAN up: ${VM_NAME}/${_n} connected"
+    else
+      info "LAN: ${VM_NAME}/${_n} already connected (nothing to do)"
+    fi
+  done
+  # Offline path left the VM powered off → boot it now (fast second boot:
+  # provisioning is done, cloud-init only runs per-boot stages).
+  if [ "${_mode:-}" = "offline" ]; then
+    govc vm.power -on "$VM_NAME" >/dev/null 2>&1 \
+      && ok "Powered on: ${VM_NAME} (second boot, LAN connected)" \
+      || warn "power-on failed — start it from vCenter console"
+  fi
+  local _ip="" _i=0
+  while [ "$_i" -lt 60 ]; do
+    _ip=$(govc vm.ip -v4 "$VM_NAME" 2>/dev/null || true)
+    [ -n "$_ip" ] && break
+    sleep 5; _i=$((_i+1))
+  done
+  if [ -n "$_ip" ]; then ok "Guest IPv4: ${_ip}"; else warn "no guest IP yet — cloud-init may still run; retry: govc vm.ip -v4 ${VM_NAME}"; fi
+  # SSH readiness: cloud-init finishes users/ssh AFTER the IP appears
+  # (LVM/mkfs can take minutes first) — retry up to 10 min instead of
+  # failing cloud-init confirm + hardening on first refusal.
+  if [ -n "$_ip" ]; then
+    # Fresh clone = new host keys: drop any stale known_hosts entry for this
+    # IP, and never consult known_hosts (avoids MITM-fail on recycled IPs).
+    ssh-keygen -R "$_ip" >/dev/null 2>&1 || true
+    _i=0; _t0=$(date +%s); _last_err=""; _out=""
+    while [ "$_i" -lt 40 ]; do
+      _out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "echo SSH-READY" 2>/tmp/lanup-ssherr || true)"
+      _last_err="$(head -c 200 /tmp/lanup-ssherr 2>/dev/null || true)"
+      case "$_out" in *SSH-READY*) break;; esac
+      sleep 15; _i=$((_i+1))
+    done
+    info "LAN: SSH gate took $(( $(date +%s) - _t0 ))s over $((_i+1)) attempt(s)${_last_err:+; last error: ${_last_err}}"
+  fi
+  # Phase 4 (best-effort): confirm cloud-init finished over SSH. Needs the
+  # operator's key for ubuntu@IP (agent or ~/.ssh default) — failure here is
+  # advisory only; the VM + LAN are already up.
+  # Reboot-tolerant: cloud-init's package stage can reboot the guest AFTER
+  # first SSH succeeds — a single check then hits a rebooting host. Poll
+  # `cloud-init status` (no --wait) so each attempt is quick; SSH failures
+  # mean "reboot in progress", retry. Track boot_id to log the reboot.
+  if [ -n "$_ip" ]; then
+    _SSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 ubuntu@${_ip}"
+    _boot1="$($_SSH "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
+    _ci=""; _j=0; _t1=$(date +%s)
+    while [ "$_j" -lt 40 ]; do
+      _ci="$($_SSH "cloud-init status 2>/dev/null" 2>/dev/null || true)"
+      case "$_ci" in
+        *done*) break;;
+        *error*) break;;
+      esac
+      sleep 15; _j=$((_j+1))
+    done
+    _boot2="$($_SSH "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
+    case "$_ci" in
+      *done*)
+        if [ -n "$_boot1" ] && [ "$_boot1" != "$_boot2" ]; then
+          ok "cloud-init done on ${VM_NAME} — fully ready (guest rebooted mid-deploy, took $(( $(date +%s) - _t1 ))s to settle)"
+        else
+          ok "cloud-init done on ${VM_NAME} — fully ready"
+        fi
+        ;;
+      *error*) warn "cloud-init errored on ${VM_NAME}: ${_ci} — check: ssh ubuntu@${_ip} 'cloud-init status --long'";;
+      *) info "cloud-init status unconfirmed after $(( $(date +%s) - _t1 ))s (SSH key may differ) — check: ssh ubuntu@${_ip} 'cloud-init status'";;
+    esac
+    # Hardening (operator policy): runs HERE, after LAN+IP — never at first
+    # boot (offline). Full network available, so apt-backed steps work.
+    # VM key exported for the script's common-user provisioning.
+    _VMKEY="$(grep -oP 'ssh_public_key\s*=\s*"\K[^"]+' "$CONFIG_FILE" | head -1)"
+    # Pre-hardening SSH settle: cloud-init's package stage can reboot the
+    # guest even AFTER reporting done — wait for one clean SSH (up to 3 min)
+    # before the single 25-min hardening run.
+    _h=0
+    while [ "$_h" -lt 12 ]; do
+      if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "echo H-READY" 2>/dev/null | grep -q "H-READY"; then break; fi
+      sleep 15; _h=$((_h+1))
+    done
+    if timeout 1500 ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "export VMPILOT_SSH_KEY='${_VMKEY}'; sudo bash -c 'bash /etc/vmpilot/hardening.sh >> /var/log/vmpilot-hardening.log 2>&1'; echo \"HARDEN_RC=\$?\"" 2>/dev/null | grep -q "HARDEN_RC=0"; then
+      ok "hardening applied on ${VM_NAME} (see /var/log/vmpilot-hardening.log)"
+      ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "printf '# VMPilot hardening manifest\n# Source: secure/<server>/<vcenter>/hardening.sh (+ <env>/hardening.sh)\ndate: %s\nscript_exit=0\nlog=/var/log/vmpilot-hardening.log\n' \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee /etc/vmpilot-hardening.md >/dev/null" 2>/dev/null || true
+      # Pipeline checks: surface the guest VERIFY lines in deploy/job output
+      # (WebUI jobs display shows these — per-step PASS/FAIL/SKIP).
+      echo "  --- hardening pipeline checks (${VM_NAME}) ---"
+      ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "grep -h '^CHECK ' /var/log/vmpilot-hardening.log 2>/dev/null | tail -20" 2>/dev/null | sed 's/^/  /' || true
+    else
+      warn "hardening unreachable/failed (SSH key?) — run manually: sudo bash /etc/vmpilot/hardening.sh"
+    fi
+    # Phase 5 (offline-boot safety): first boot without LAN means cloud-init's
+    # apt installs never ran. If the template lacks lvm2/growpart, the LVM
+    # expand failed too — detect here (repair = preinstall in template, or
+    # apt install + cloud-init clean + reboot this VM).
+    _missing="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "for t in lvextend growpart mkfs.xfs mkfs.ext4 pvcreate vgextend; do command -v \$t >/dev/null || echo \$t; done" 2>/dev/null || true)"
+    if [ -n "$_missing" ]; then
+      warn "guest tools missing on ${VM_NAME}: ${_missing} (first boot was offline)"
+      echo "  Fix template (one-time): boot it WITH lan, apt install lvm2 cloud-guest-utils, reseal to template."
+      echo "  Repair this VM: ssh ubuntu@${_ip} → sudo apt-get install -y lvm2 cloud-guest-utils && sudo cloud-init clean --logs && sudo reboot"
+    fi
+  fi
+  unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME
+}
+
 # ─── Credentials ──────────────────────────────────────────────────────────
 DECRYPT_SCRIPT="${SCRIPT_DIR}/sops-decrypt.sh"
 [ -f "$DECRYPT_SCRIPT" ] || { error "Missing: ${DECRYPT_SCRIPT}"; exit 1; }
+if [ "$LANUP_ONLY" = true ]; then
+  LANUP_SKIP_GATE=true
+  bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV"
+  lan_up
+  bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" --clean
+  exit 0
+fi
 bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV"
 
 cleanup() {
@@ -410,7 +626,7 @@ VAR_FILE="${COMBINED#${ROOT_DIR}/}"
 # -var-file so terraform's `user_groups` map comes straight from the policy
 # layer. Absent file → terraform falls back to empty map → module uses legacy
 # full-sudo.
-ROLES_FILE="${ROOT_DIR}/secure/${VCENTER}/${ENV}/user-groups.tfvars"
+ROLES_FILE="${ROOT_DIR}/$(vdir_for secure "$VCENTER")/${ENV}/user-groups.tfvars"
 ROLES_ARGS=()
 if [ -f "$ROLES_FILE" ]; then
   ROLES_VAR="${ROLES_FILE#${ROOT_DIR}/}"
@@ -483,6 +699,12 @@ else
       info "Config file renamed: ${BASE} → ${EXPECTED}"
       CONFIG_FILE="$NEW_FILE"
     fi
+  fi
+  # LAN up LAST (fast boot happened disconnected): connect NICs + wait IPv4.
+  if [ "$NO_LAN" = true ]; then
+    info "LAN left disconnected (--no-lan) — bring it up later: bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME} --lan-up"
+  else
+    lan_up || warn "LAN auto-connect had issues — retry manually (see above)"
   fi
 fi
 
