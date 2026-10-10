@@ -20,6 +20,15 @@ err()      { echo -e "${RED}✗${NC} $*" >&2; }
 die()      { err "$1"; exit 1; }
 error()    { err "$@"; }   # alias for err() — used by deploy scripts
 
+# ─── Pipeline markers (MACHINE contract — WebUI parses these) ────────────
+# Format:  :: STEP <script>:<phase> <start|done|fail|skip> [detail]
+# Rules: keep the literal ":: STEP " prefix + single spaces; <phase> kebab-case;
+# detail has no newlines. JobThread.stepsFromOutput() + Dashboard strip parse
+# the SUBSTRING (ANSI-safe, no ^ anchor). Human-readable AND machine-readable.
+pstep() { # $1=script $2=phase $3=status [$4=detail]
+  echo -e "${CYAN}${BOLD}::${NC} STEP $1:$2 $3${4:+ $4}"
+}
+
 # ─── Author banner ────────────────────────────────────────────────────────
 # Printed on every script run so the project's origin is always visible.
 vmpilot_banner() {

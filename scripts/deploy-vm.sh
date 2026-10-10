@@ -427,6 +427,7 @@ COMBINED="${ENV_DIR}/.deploy-combined.tfvars"
 
 N=$(grep -cE '^[[:space:]]+[a-zA-Z0-9_-]+ = \{' "$COMBINED" || true)
 info "Combined config: ${N} VM entry/ies (vcenter '${VCENTER}', env '${ENV}', own state)"
+  pstep deploy-vm config done "${N}-entries"
 info "VMs in combined config:"
 VM_LIST=""
 for f in "${ENV_DIR}"/vm-*.tfvars; do
@@ -470,7 +471,7 @@ lan_up() {
     sleep 5; _i=$((_i+1))
   done
   case "$_st" in
-    *poweredOn/toolsOk*|*poweredOn/toolsOld*) ok "Guest ready: ${VM_NAME} (${_st})" ;;
+    *poweredOn/toolsOk*|*poweredOn/toolsOld*) ok "Guest ready: ${VM_NAME} (${_st})"; pstep deploy-vm guest-ready done "${_st}" ;;
     *) warn "guest not ready yet (${_st:-unknown}) — connecting LAN anyway (check VM console if IP never appears)" ;;
   esac
   # Phase 1b: ALL offline OS work complete? An offline first boot ends with
@@ -505,6 +506,7 @@ lan_up() {
   for _n in $_nics; do
     if govc device.connect -vm "$VM_NAME" "$_n" >/dev/null 2>&1; then
       ok "LAN up: ${VM_NAME}/${_n} connected"
+      pstep deploy-vm lan-connect done "${_n}"
     else
       info "LAN: ${VM_NAME}/${_n} already connected (nothing to do)"
     fi
@@ -522,7 +524,7 @@ lan_up() {
     [ -n "$_ip" ] && break
     sleep 5; _i=$((_i+1))
   done
-  if [ -n "$_ip" ]; then ok "Guest IPv4: ${_ip}"; else warn "no guest IP yet — cloud-init may still run; retry: govc vm.ip -v4 ${VM_NAME}"; fi
+  if [ -n "$_ip" ]; then ok "Guest IPv4: ${_ip}"; pstep deploy-vm guest-ip done "${_ip}"; else warn "no guest IP yet — cloud-init may still run; retry: govc vm.ip -v4 ${VM_NAME}"; pstep deploy-vm guest-ip fail "timeout"; fi
   # SSH readiness: cloud-init finishes users/ssh AFTER the IP appears
   # (LVM/mkfs can take minutes first) — retry up to 10 min instead of
   # failing cloud-init confirm + hardening on first refusal.
@@ -538,6 +540,7 @@ lan_up() {
       sleep 15; _i=$((_i+1))
     done
     info "LAN: SSH gate took $(( $(date +%s) - _t0 ))s over $((_i+1)) attempt(s)${_last_err:+; last error: ${_last_err}}"
+    pstep deploy-vm ssh-gate done "$((_i+1))-attempts"
   fi
   # Phase 4 (best-effort): confirm cloud-init finished over SSH. Needs the
   # operator's key for ubuntu@IP (agent or ~/.ssh default) — failure here is
@@ -563,12 +566,14 @@ lan_up() {
       *done*)
         if [ -n "$_boot1" ] && [ "$_boot1" != "$_boot2" ]; then
           ok "cloud-init done on ${VM_NAME} — fully ready (guest rebooted mid-deploy, took $(( $(date +%s) - _t1 ))s to settle)"
+          pstep deploy-vm cloud-init done "rebooted-mid-deploy"
         else
           ok "cloud-init done on ${VM_NAME} — fully ready"
+        pstep deploy-vm cloud-init done
         fi
         ;;
       *error*) warn "cloud-init errored on ${VM_NAME}: ${_ci} — check: ssh ubuntu@${_ip} 'cloud-init status --long'";;
-      *) info "cloud-init status unconfirmed after $(( $(date +%s) - _t1 ))s (SSH key may differ) — check: ssh ubuntu@${_ip} 'cloud-init status'";;
+      *) info "cloud-init status unconfirmed after $(( $(date +%s) - _t1 ))s (SSH key may differ) — check: ssh ubuntu@${_ip} 'cloud-init status'"; pstep deploy-vm cloud-init fail "unconfirmed";;
     esac
     # Hardening (operator policy): runs HERE, after LAN+IP — never at first
     # boot (offline). Full network available, so apt-backed steps work.
@@ -584,6 +589,7 @@ lan_up() {
     done
     if timeout 1500 ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "export VMPILOT_SSH_KEY='${_VMKEY}'; sudo bash -c 'bash /etc/vmpilot/hardening.sh >> /var/log/vmpilot-hardening.log 2>&1'; echo \"HARDEN_RC=\$?\"" 2>/dev/null | grep -q "HARDEN_RC=0"; then
       ok "hardening applied on ${VM_NAME} (see /var/log/vmpilot-hardening.log)"
+      pstep deploy-vm hardening done
       rm -f "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
       ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "printf '# VMPilot hardening manifest\n# Source: secure/<server>/<vcenter>/hardening.sh (+ <env>/hardening.sh)\ndate: %s\nscript_exit=0\nlog=/var/log/vmpilot-hardening.log\n' \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee /etc/vmpilot-hardening.md >/dev/null" 2>/dev/null || true
       # Pipeline checks: surface the guest VERIFY lines in deploy/job output
@@ -597,6 +603,7 @@ lan_up() {
       # --lan-up) or manual run, which rm's this file on success.
       date -u +%Y-%m-%dT%H:%M:%SZ > "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
       _HARDEN_FAILED=1
+      pstep deploy-vm hardening fail "see-log"
     fi
     # Phase 5 (offline-boot safety): first boot without LAN means cloud-init's
     # apt installs never ran. If the template lacks lvm2/growpart, the LVM
@@ -670,15 +677,18 @@ done
 
 if [ "$MODE" = "plan" ]; then
   info "Planning: ${VM_NAME}"
+  pstep deploy-vm plan start
   terraform -chdir="$TF_DIR" plan \
     -state="${STATE_FILE}" \
     -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}"
 else
   info "Applying: ${VM_NAME}"
+  pstep deploy-vm apply start
   terraform -chdir="$TF_DIR" apply -auto-approve \
     -state="${STATE_FILE}" \
     -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}"
   ok "Done: ${VM_NAME} deployed"
+  pstep deploy-vm apply done
 
   # ─── Print hostname + IP ────────────────────────────────────────
   # Source of truth = the per-VM config file's ip_address (deploy-vm.sh
@@ -724,10 +734,12 @@ else
   else
     if lan_up; then
       ok "LAN + hardening complete: ${VM_NAME}"
+      pstep deploy-vm pipeline done
     else
       _lan_rc=$?
       if [ "$_lan_rc" = "3" ]; then
         error "Deployed but HARDENING FAILED: ${VM_NAME} (marker .hardening-${VM_NAME}.failed) — retry: bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME} --lan-up"
+        pstep deploy-vm pipeline fail "hardening-failed"
         exit 3
       fi
       warn "LAN auto-connect had issues (rc=${_lan_rc}) — retry manually (see above)"

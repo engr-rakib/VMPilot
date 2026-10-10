@@ -967,6 +967,7 @@ done
 if [ -n "$FREE_IP" ]; then
   if [ "$FREE_IP" = "$BASE_IP" ]; then
     ok "IP ${BASE_IP} is FREE — selected for this VM (${NET_PORT_GROUP})"
+  pstep create-vm-config ipam done "${FREE_IP}"
   else
     warn "IP ${BASE_IP} is in use or reserved (ping reply / existing config)"
     ok "Next free IP selected: ${FREE_IP} (${NET_PORT_GROUP})"
@@ -975,6 +976,7 @@ if [ -n "$FREE_IP" ]; then
 else
   warn "Could not auto-find free IP — you will need to set it manually."
   FREE_IP="$BASE_IP"
+  pstep create-vm-config ipam fail "manual-needed"
 fi
 if [ -z "${VM_GATEWAY:-}" ]; then
   prompt_optional VM_GATEWAY "Gateway" "$DEFAULT_GATEWAY"
@@ -1710,6 +1712,7 @@ ENTRY
     FREE_IP=$(echo "$_re" | jq -r '.free_ip // empty')
     [ -n "$FREE_IP" ] || die "no free IP available in ${ENV} — free one and retry"
     ok "Re-selected: ${FREE_IP}"
+    pstep create-vm-config ipam done "${FREE_IP}"
   fi
 ) 9>"${ENV_DIR}/.ipam.lock"
 CONFIG_FILE="${ENV_DIR}/vm-${VM_NAME}_${FREE_IP}.tfvars"
@@ -1891,6 +1894,7 @@ ${NEW_ENTRY}
 PERVM
 set +o noclobber
 ok "Created ${CONFIG_FILE}"
+pstep create-vm-config pipeline done "${VM_NAME}"
 
 echo ""
 info "Deploy this VM with:"

@@ -95,6 +95,7 @@ SKIPPED=0
 MISSING_CFG=0
 FAILED=""
 FAILED_N=0
+pstep deploy-sync scan start
 
 # ─── R5: state-tracked VMs whose config is missing ────────────────────────
 # If the VM is gone from vCenter too, the state entry is stale → remove it
@@ -149,15 +150,19 @@ for host in "${!CFG_KEY[@]}"; do
     # UNHARDENED: never R2-skip, fall through to R3 retry instead.
     if [ -f "${ENV_DIR}/.hardening-${host}.failed" ]; then
       info "R3 retry: ${host}  (previous hardening failed — retrying deploy + hardening)"
+      pstep deploy-sync vm-retry start "${host}"
     elif [ -n "$tracked_ip" ] && [ "$tracked_ip" = "$want_ip" ]; then
       info "R2 skip: ${host}  (ip ${tracked_ip} unchanged)"
+      pstep deploy-sync vm-skip done "${host}"
       SKIPPED=$((SKIPPED + 1))
       continue
     else
       info "R3 deploy: ${host}  (ip ${want_ip:-?} → next free)"
+      pstep deploy-sync vm-deploy start "${host}"
     fi
   else
     info "R1 deploy: ${host}  (new VM, next free IP)"
+      pstep deploy-sync vm-deploy start "${host}"
   fi
 
   CHANGED=$((CHANGED + 1))
@@ -190,8 +195,10 @@ echo "=========================================================="
 
 if [ "$FAILED_N" -gt 0 ]; then
   error "sync finished with ${FAILED_N} failure(s) — fix above, then re-run"
+  pstep deploy-sync pipeline fail "${FAILED_N}-failed"
   exit 1
 fi
+pstep deploy-sync pipeline done "${CHANGED}-changed"
 
 if [ "$MISSING_CFG" -eq 1 ] && [ "$MODE" = "apply" ]; then
   echo "NOTE: some VMs are in state but have no config file — run destroy.sh explicitly if you want them gone."

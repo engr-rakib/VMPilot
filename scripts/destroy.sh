@@ -65,7 +65,11 @@ for arg in "$@"; do
 done
 
 TF_DIR="${ROOT_DIR}/terraform"
-ENV_DIR="${ROOT_DIR}/deploy/${VCENTER}/${ENV}"
+# Nested layout: secure/<srv>/<vc>/ + deploy/<srv>/<vc>/ (tolerant reads).
+vdir_for() {
+  local _r="${ROOT_DIR:-.}"; if [ -d "${_r}/$1/${2##*_}/$2" ]; then echo "$1/${2##*_}/$2"; else echo "$1/$2"; fi
+}
+ENV_DIR="${ROOT_DIR}/$(vdir_for deploy "$VCENTER")/${ENV}"
 STATE_FILE="${TF_DIR}/terraform.${VCENTER}.${ENV}.tfstate"
 CONFIG_FILE=""
 for f in "${ENV_DIR}"/vm-${VM_NAME}_*.tfvars; do
@@ -129,6 +133,7 @@ if [ -n "$TRACKED" ]; then
   STATE_BACKUP="${BACKUP_DIR}/pre-destroy-${VCENTER}-${ENV}-${VM_NAME}-${STAMP}.tfstate"
   cp "$STATE_FILE" "$STATE_BACKUP"
   ok "State backed up: $(basename "${STATE_BACKUP}")"
+  pstep destroy state-backup done
 fi
 
 # ─── Step 1: remove from Terraform state ──────────────────────────────────
@@ -138,6 +143,7 @@ if [ -n "$TRACKED" ]; then
     "${VM_RESOURCE}" ${IPAM_RESOURCE} >/dev/null 2>&1 || \
     terraform -chdir="$TF_DIR" state rm -state="${STATE_FILE}" "${VM_RESOURCE}" >/dev/null
   ok "Removed from state."
+  pstep destroy state-rm done
 fi
 
 # ─── Step 2: destroy the VM in vCenter via govc ───────────────────────────
@@ -159,17 +165,30 @@ if [ -f "$CRED_FILE" ]; then
   GOVC_USERNAME="$(sed -n 's/^vsphere_user[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$CRED_FILE" | head -n1)"
   GOVC_PASSWORD="$(sed -n 's/^vsphere_password[[:space:]]*=[[:space:]]*"\(.*\)".*/\1/p' "$CRED_FILE" | head -n1)"
 else
-  warn "No decrypted credentials — check secure/${VCENTER}/credentials.tfvars"
+  warn "No decrypted credentials — check secure/<server>/<vcenter>/credentials.tfvars (or the platform store)"
 fi
 
 if [ -n "${GOVC_URL:-}" ] && [ -n "${GOVC_USERNAME:-}" ] && [ -n "${GOVC_PASSWORD:-}" ]; then
   info "Destroying VM in vCenter: ${VM_NAME}"
   export GOVC_URL GOVC_USERNAME GOVC_PASSWORD GOVC_INSECURE=1 TERM=dumb
+  # Multi-DC vCenters need an explicit datacenter scope (else govc refuses
+  # with "please specify a datacenter"). Read it from the VM config file.
+  if [ -n "${CONFIG_FILE:-}" ] && [ -f "$CONFIG_FILE" ]; then
+    export GOVC_DATACENTER="$(grep -oE '^datacenter[[:space:]]*=[[:space:]]*"[^"]+"' "$CONFIG_FILE" | head -1 | sed -E 's/.*"(.*)".*/\1/')"
+  fi
   if govc vm.destroy "${VM_NAME}" 2>/dev/null; then
     ok "VM destroyed: ${VM_NAME}"
   else
-    warn "govc vm.destroy reported a problem (VM may already be gone)."
+    warn "govc vm.destroy reported a problem — verifying whether ${VM_NAME} is really gone…"
   fi
+  # Never delete state-adjacent files while the VM still exists: verify gone.
+  if govc find / -type m -name "${VM_NAME}" 2>/dev/null | grep -q .; then
+    error "VM '${VM_NAME}' STILL EXISTS in vCenter — destroy failed. Config file KEPT. Fix vCenter first, then re-run."
+    pstep destroy vcenter-destroy fail "still-exists"
+    exit 1
+  fi
+  ok "Verified gone from vCenter: ${VM_NAME}"
+  pstep destroy vcenter-destroy done
 else
   warn "Skipping govc destroy — credentials unavailable."
 fi
@@ -178,6 +197,7 @@ fi
 if [ -n "$CONFIG_FILE" ] && [ "$KEEP_CONFIG" = false ]; then
   rm -f "$CONFIG_FILE"
   ok "Config file removed: ${CONFIG_FILE#${ROOT_DIR}/}"
+  pstep destroy config-delete done
 elif [ -n "$CONFIG_FILE" ]; then
   warn "Config kept: ${CONFIG_FILE#${ROOT_DIR}/} — deploy-sync will redeploy it (R1)."
 fi
@@ -185,6 +205,7 @@ fi
 echo ""
 echo "=========================================================="
 ok "Destroy complete: ${VM_NAME}"
+pstep destroy pipeline done
 echo "  (restore from a pre-destroy state file under backups/ if needed)"
 echo "=========================================================="
 
