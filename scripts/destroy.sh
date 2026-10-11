@@ -194,7 +194,7 @@ if [ -n "${GOVC_URL:-}" ] && [ -n "${GOVC_USERNAME:-}" ] && [ -n "${GOVC_PASSWOR
   else
   _VMPATH="$(echo "$_MATCHES" | head -n1)"
   info "Target (fingerprint):"
-  govc vm.info -e "$_VMPATH" 2>/dev/null | grep -E "^(Name|Power state|IP address|Host|Memory|CPU):" | sed 's/^/    /' || true
+  govc vm.info -e "$_VMPATH" 2>/dev/null | grep -E "(Name|Power state|IP address|Host|Memory|CPU):" | sed 's/^/    /' || true
   pstep destroy resolve done "${_VMPATH##*/vm/}"
   if govc vm.destroy "$_VMPATH" 2>/dev/null; then
     ok "VM destroyed: ${VM_NAME}"
