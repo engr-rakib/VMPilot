@@ -21,12 +21,13 @@ die()      { err "$1"; exit 1; }
 error()    { err "$@"; }   # alias for err() — used by deploy scripts
 
 # ─── Pipeline markers (MACHINE contract — WebUI parses these) ────────────
-# Format:  :: STEP <script>:<phase> <start|done|fail|skip> [detail]
+# Format:  :: STEP <script>:<phase> <start|done|fail|skip> [detail] ts=<epoch>
 # Rules: keep the literal ":: STEP " prefix + single spaces; <phase> kebab-case;
-# detail has no newlines. JobThread.stepsFromOutput() + Dashboard strip parse
-# the SUBSTRING (ANSI-safe, no ^ anchor). Human-readable AND machine-readable.
+# detail has no newlines; ts= is ALWAYS last (epoch seconds → per-step durations).
+# JobThread.stepsFromOutput() + Dashboard strip parse the SUBSTRING (ANSI-safe,
+# no ^ anchor). Human-readable AND machine-readable.
 pstep() { # $1=script $2=phase $3=status [$4=detail]
-  echo -e "${CYAN}${BOLD}::${NC} STEP $1:$2 $3${4:+ $4}"
+  echo -e "${CYAN}${BOLD}::${NC} STEP $1:$2 $3${4:+ $4} ts=$(date +%s)"
 }
 
 # ─── Author banner ────────────────────────────────────────────────────────

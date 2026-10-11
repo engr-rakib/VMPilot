@@ -148,6 +148,7 @@ for i in $(seq 0 "$MAX_ATTEMPTS"); do
   # Honor a pre-assigned IP (skip_ip / or the VM's own base) — never move a
   # running VM off its configured IP just because it answers ping.
   if [ -n "$SKIP_IP" ] && [ "$candidate" = "$SKIP_IP" ]; then
+    echo ":: STEP ipam:scan done ${candidate} ts=$(date +%s)" >&2
     echo "{\"free_ip\": \"$candidate\", \"attempted\": \"$i\"}"
     exit 0
   fi
@@ -155,10 +156,14 @@ for i in $(seq 0 "$MAX_ATTEMPTS"); do
     continue
   fi
   if ! ping -c1 -W1 "$candidate" &>/dev/null; then
+    # STEP marker goes to STDERR: stdout is the JSON contract (terraform
+    # external data source parses it) — stderr is safe for humans + job logs.
+    echo ":: STEP ipam:scan done ${candidate} ts=$(date +%s)" >&2
     echo "{\"free_ip\": \"$candidate\", \"attempted\": \"$i\"}"
     exit 0
   fi
 done
 
+echo ":: STEP ipam:scan fail \"none-free\" ts=$(date +%s)" >&2
 echo "{\"error\": \"No free IP found after $MAX_ATTEMPTS attempts from $BASE_IP\"}"
 exit 1
