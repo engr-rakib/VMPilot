@@ -27,7 +27,21 @@ error()    { err "$@"; }   # alias for err() — used by deploy scripts
 # JobThread.stepsFromOutput() + Dashboard strip parse the SUBSTRING (ANSI-safe,
 # no ^ anchor). Human-readable AND machine-readable.
 pstep() { # $1=script $2=phase $3=status [$4=detail]
-  echo -e "${CYAN}${BOLD}::${NC} STEP $1:$2 $3${4:+ $4} ts=$(date +%s)"
+  local _ts
+  _ts=$(date +%s)
+  echo -e "${CYAN}${BOLD}::${NC} STEP $1:$2 $3${4:+ $4} ts=${_ts}"
+  # Per-VM pipeline log (set PIPELINE_LOG=<file> by the caller): every marker
+  # of every run APPENDS here — full lifecycle history per VM, CLI-readable.
+  # Plain format (no ANSI), same contract otherwise.
+  if [ -n "${PIPELINE_LOG:-}" ]; then
+    echo ":: STEP $1:$2 $3${4:+ $4} ts=${_ts}" >> "$PIPELINE_LOG" 2>/dev/null || true
+  fi
+}
+# Start (or continue) the per-VM pipeline log: run header line. Call once per
+# invocation AFTER setting PIPELINE_LOG.
+pipeline_log_header() { # $1=script-name (rest of $0/$* auto)
+  [ -n "${PIPELINE_LOG:-}" ] || return 0
+  echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) $1 ===" >> "$PIPELINE_LOG" 2>/dev/null || true
 }
 
 # ─── Author banner ────────────────────────────────────────────────────────

@@ -70,6 +70,9 @@ vdir_for() {
   local _r="${ROOT_DIR:-.}"; if [ -d "${_r}/$1/${2##*_}/$2" ]; then echo "$1/${2##*_}/$2"; else echo "$1/$2"; fi
 }
 ENV_DIR="${ROOT_DIR}/$(vdir_for deploy "$VCENTER")/${ENV}"
+# Per-VM pipeline log (same file deploy-vm.sh appends to — full history).
+# Header is written after the existence check below (no litter for ghosts).
+PIPELINE_LOG="${ENV_DIR}/.pipeline-${VM_NAME}.log"
 STATE_FILE="${TF_DIR}/terraform.${VCENTER}.${ENV}.tfstate"
 CONFIG_FILE=""
 for f in "${ENV_DIR}"/vm-${VM_NAME}_*.tfvars; do
@@ -85,6 +88,7 @@ TRACKED="$(terraform -chdir="$TF_DIR" state list -state="${STATE_FILE}" 2>/dev/n
 if [ -z "$TRACKED" ] && [ -z "$CONFIG_FILE" ]; then
   die "VM '${VM_NAME}' is not in state and has no config file — nothing to destroy."
 fi
+pipeline_log_header "destroy $VCENTER $ENV $VM_NAME"
 
 echo ""
 echo "=========================================================="

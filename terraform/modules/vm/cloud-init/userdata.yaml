@@ -85,8 +85,31 @@ ${indent(6, format("\n%s", access_manifest))}
       Defaults  loglinelen = 0
     permissions: '0440'
 %{ endif }
+%{ if length([for u in extra_users : u if u.password != ""]) > 0 }
+  # Password logins with forced first change need keyboard-interactive
+  # (Ubuntu 24.04 defaults it OFF — without this, expired-password users
+  # can neither log in nor change the password). Password auth itself stays
+  # template-managed; this only enables the change dialogue.
+  - path: /etc/ssh/sshd_config.d/60-vmpilot-kbdinteractive.conf
+    content: |
+      KbdInteractiveAuthentication yes
+    permissions: '0644'
+%{ endif }
 
-bootcmd:
+# ── Hardening script (operator-owned policy, verbatim).
+# deploy-vm.sh concatenates secure/<srv>/<vc>/hardening.sh (DC baseline) +
+# secure/<srv>/<vc>/<env>/hardening.sh (env extras) and injects the result as
+# the `hardening_script` variable (terraform-escaped). What you write is what
+# runs — no backend mapping, no keys. It executes AFTER all OS provisioning
+# (see runcmd tail); output → /var/log/vmpilot-hardening.log.
+# Rules: plain bash only; NO apt (offline first boot — binaries live in the
+# template); every step must tolerate re-run; keep it fast (it gates LAN-up).
+  - path: /etc/vmpilot/hardening.sh
+    content: |
+      ${indent(6, hardening_script)}
+    permissions: '0750'
+
+bootcmd:bootcmd:
   - systemctl mask systemd-networkd-wait-online.service 2>/dev/null || true
   - swapoff /swapfile 2>/dev/null || true
   - sed -i '\|/swapfile|d' /etc/fstab 2>/dev/null || true
@@ -101,12 +124,10 @@ bootcmd:
 %{ endfor ~}
 %{ endif }
 %{ endif }
-  # DNS wait retry — prevents package install failures
-  - |
-    for i in 1 2 3 4 5; do
-      ping -c1 -W2 archive.ubuntu.com >/dev/null 2>&1 && break
-      sleep 5
-    done
+  # NOTE: no DNS-wait loop and no packages: block on purpose — first boot is
+  # FULLY offline-capable (lan-up-last). The template owns all packages
+  # (lvm2, cloud-guest-utils, xfsprogs, node_exporter); OS updates are an
+  # explicit later step, never a boot dependency.
 %{ if disable_auto_updates }
   - systemctl disable --now apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
   - systemctl mask apt-daily.service apt-daily-upgrade.service apt-daily.timer apt-daily-upgrade.timer unattended-upgrades.service 2>/dev/null || true
@@ -119,21 +140,25 @@ growpart:
 
 resize_rootfs: true
 
-%{ if length(lvm_config) > 0 || length(mount_points) > 0 || length(os_partitions) > 0 }
-packages:
-%{ if length(lvm_config) > 0 || length(os_partitions) > 0 }
-  - lvm2
-  - cloud-guest-utils
-%{ endif }
-%{ if length(mount_points) > 0 }
-  - xfsprogs
-  - xfsdump
-%{ endif }
+# First boot is FULLY offline-capable (lan-up-last): NO packages: block, NO
+# network waits. The template owns all required packages (lvm2,
+# cloud-guest-utils, xfsprogs, node_exporter binary — see
+# docs/template_prepare_for_prod/prod_template.md Phase-4/4a). OS updates are
+# an explicit later step (ansible/manual), never a boot dependency, so initial
+# VM-ready is never slowed by archive fetches.
 
 runcmd:
   - netplan apply
+  # Guest pipeline marker (YAML-safe printf form — no ": " in source; output
+  # keeps the ":: STEP " contract; fetched post-LAN into the deploy log).
+  - printf '%s STEP %s done ts=%s\n' "::" "provision:network" "$(date +%s)"
+  # Pick up the kbdinteractive drop-in (password-change dialogue for
+  # expired-password users). Safe: no SSH sessions exist during provisioning.
+  - systemctl reload ssh 2>/dev/null || systemctl restart ssh 2>/dev/null || true
+  - printf '%s STEP %s done ts=%s\n' "::" "provision:ssh" "$(date +%s)"
 %{ if length(os_partitions) > 0 }
   - |
+    echo ":: STEP provision:disk-allocate start ts=$(date +%s)"
     growpart /dev/sda 2 2>/dev/null || true
     pvresize /dev/sda2
 %{ for part in os_partitions ~}
@@ -170,7 +195,11 @@ runcmd:
     echo '/dev/vg_os/${part.lv_name} ${part.mount_point} ${part.filesystem} defaults 0 2' >> /etc/fstab
 %{ endif }
 %{ endif }
+    echo ":: STEP provision:lvm-partition done ${part.lv_name} ts=$(date +%s)"
 %{ endfor ~}
+%{ endif }
+%{ if length(os_partitions) > 0 }
+  - printf '%s STEP %s done ts=%s\n' "::" "provision:disk-allocate" "$(date +%s)"
 %{ endif }
 %{ if ! os_has_swap }
   - |
@@ -181,6 +210,7 @@ runcmd:
       swapon /swapfile
       echo '/swapfile none swap sw 0 0' >> /etc/fstab
     fi
+    echo ":: STEP provision:swap done ts=$(date +%s)"
 %{ endif }
 %{ if length(lvm_config) > 0 }
   - |
@@ -191,6 +221,7 @@ runcmd:
 %{ for vg in distinct([for lv in lvm_config : lv.vg_name]) ~}
     vgcreate ${vg} $DEVICES 2>/dev/null || true
 %{ endfor ~}
+    echo ":: STEP provision:lvm-data done ts=$(date +%s)"
 %{ for lv in lvm_config ~}
     if ! lvs /dev/${lv.vg_name}/${lv.lv_name} &>/dev/null; then
       lvcreate -L ${lv.lv_size} -n ${lv.lv_name} ${lv.vg_name}
@@ -212,6 +243,7 @@ runcmd:
     mount /dev/${lv.vg_name}/${lv.lv_name} ${lv.mount_point}
     chmod "$ORIG_PERMS" ${lv.mount_point}
     echo '/dev/${lv.vg_name}/${lv.lv_name} ${lv.mount_point} ${lv.filesystem} defaults 0 2' >> /etc/fstab
+    echo ":: STEP provision:lvm-mount done ${lv.vg_name}/${lv.lv_name} ts=$(date +%s)"
 %{ endfor ~}
 %{ endif }
 %{ if length(mount_points) > 0 }
@@ -228,33 +260,60 @@ runcmd:
     mount ${mp.device} ${mp.mount_point}
     echo '${mp.device} ${mp.mount_point} ${mp.filesystem} defaults 0 2' >> /etc/fstab
 %{ endif }
+    echo ":: STEP provision:mounts done ${mp.mount_point} ts=$(date +%s)"
 %{ endfor ~}
 %{ endif }
 %{ if length(extra_users) > 0 }
-  # Extra users created via cloud-init users module above — no runcmd needed
+  # Extra users created via cloud-init users module above — verify here so the
+  # pipeline shows per-ID creation (ID creation checkpoint).
+  - |
+    for _u in %{ for u in extra_users }${u.username} %{ endfor ~}; do
+      [ -n "$_u" ] && id "$_u" >/dev/null 2>&1 && echo ":: STEP provision:users done $_u ts=$(date +%s)"
+    done
 %{ endif }
+  # Operator login checkpoint (ubuntu exists either from the image or users above).
+  - |
+    if id ubuntu >/dev/null 2>&1; then echo ":: STEP provision:users done ubuntu ts=$(date +%s)"; else echo ":: STEP provision:users fail ubuntu ts=$(date +%s)"; fi
+  # Dependency tools checkpoint (template owns them; provision proves it).
+  - |
+    _miss=""
+    for _t in lvextend growpart mkfs.xfs mkfs.ext4 pvcreate vgextend vgcreate lvcreate; do
+      command -v "$_t" >/dev/null 2>&1 || _miss="$_miss $_t"
+    done
+    if [ -z "$_miss" ]; then echo ":: STEP provision:deps done ts=$(date +%s)"; else echo ":: STEP provision:deps fail missing:$_miss ts=$(date +%s)"; fi
+  # Root-access checkpoint (ubuntu passwordless sudo for deploy operator).
+  - |
+    if sudo -n -U ubuntu true 2>/dev/null || sudo -l -U ubuntu 2>/dev/null | grep -q "NOPASSWD"; then echo ":: STEP provision:root-access done ubuntu ts=$(date +%s)"; else echo ":: STEP provision:root-access fail ubuntu ts=$(date +%s)"; fi
 %{ if enable_node_exporter }
   - |
+    echo ":: STEP provision:node-exporter start ts=$(date +%s)"
     if [ ! -f /usr/local/bin/node_exporter ]; then
-      wget -qO /tmp/ne.tar.gz https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz
-      tar -xzf /tmp/ne.tar.gz -C /tmp/
-      install -m 0755 /tmp/node_exporter-1.8.2.linux-amd64/node_exporter /usr/local/bin/node_exporter
-      cat > /etc/systemd/system/node_exporter.service <<'SVC'
-[Unit]
-Description=Prometheus Node Exporter
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/node_exporter
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-SVC
-      systemctl daemon-reload
-      systemctl enable --now node_exporter
-      rm -rf /tmp/node_exporter-* /tmp/ne.tar.gz
+      wget -T 20 -qO /tmp/ne.tar.gz https://github.com/prometheus/node_exporter/releases/download/v1.8.2/node_exporter-1.8.2.linux-amd64.tar.gz 2>/dev/null && tar -xzf /tmp/ne.tar.gz -C /tmp/ && install -m 0755 /tmp/node_exporter-1.8.2.linux-amd64/node_exporter /usr/local/bin/node_exporter && rm -rf /tmp/node_exporter-* /tmp/ne.tar.gz || true
     fi
+    if [ -f /usr/local/bin/node_exporter ]; then
+      id node_exporter >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin node_exporter || true
+      chown node_exporter:node_exporter /usr/local/bin/node_exporter 2>/dev/null || true
+      { echo "[Unit]"; echo "Description=Prometheus Node Exporter"; echo "After=network-online.target"; echo "Wants=network-online.target"; echo "[Service]"; echo "User=node_exporter"; echo "Group=node_exporter"; echo "ExecStart=/usr/local/bin/node_exporter"; echo "Restart=always"; echo "RestartSec=10"; echo "[Install]"; echo "WantedBy=multi-user.target"; } > /etc/systemd/system/node_exporter.service
+      systemctl daemon-reload
+      systemctl enable --now node_exporter 2>/dev/null || true
+    fi
+    if systemctl is-active --quiet node_exporter 2>/dev/null; then echo ":: STEP provision:node-exporter done ts=$(date +%s)"; else echo ":: STEP provision:node-exporter fail ts=$(date +%s)"; fi
 %{ endif }
-%{ endif }
+  # Hardening: DELIVERED here (/etc/vmpilot/hardening.sh), EXECUTED later.
+  # It runs AFTER LAN is up (deploy-vm.sh lan_up over SSH — with network, so
+  # apt-backed steps work). First boot stays fully offline: OS provisioning
+  # only, then poweroff for LAN-up. Never executed here.
+  - echo "hardening policy delivered = $(wc -l < /etc/vmpilot/hardening.sh 2>/dev/null || echo 0) lines (runs post-LAN via deploy)"
+  - printf '%s STEP %s done lines=%s ts=%s\n' "::" "provision:policy-delivered" "$(wc -l < /etc/vmpilot/hardening.sh 2>/dev/null || echo 0)" "$(date +%s)"
+  # Offline first boot (lan-up-last): no global IPv4 means the LAN cable is
+  # disconnected. Every local provisioning step above is complete — power off
+  # so deploy connects the LAN onto a fully-provisioned guest (no network
+  # fetch can delay readiness afterwards). Online boots skip this entirely.
+  # Power state IS the completion signal (observable via govc, no network).
+  - |
+    if [ -z "$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[0-9.]+' | grep -v '^169\.254\.')" ]; then
+      echo "VMPilot: offline first boot complete — powering off for LAN-up"
+      poweroff
+    fi
+
+final_message: "VMPilot provisioning complete"

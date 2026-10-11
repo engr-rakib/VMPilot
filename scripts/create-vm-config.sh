@@ -302,6 +302,12 @@ else
 fi
 mkdir -p "${SCRIPT_DIR}/../${NDEP}/${ENV}"
 ENV_DIR="${SCRIPT_DIR}/../${NDEP}/${ENV}"
+# Per-VM pipeline log (same file deploy-vm.sh appends to — full history).
+# VM_NAME is final by now (identity section ran before ENV finalize).
+PIPELINE_LOG="${ENV_DIR}/.pipeline-${VM_NAME}.log"
+pipeline_log_header "create-vm-config ${VCENTER} ${ENV} ${VM_NAME}"
+# Backfill: the identity marker printed before the log path existed.
+echo ":: STEP create-vm-config:identity done ${VM_NAME} ts=$(date +%s)" >> "$PIPELINE_LOG" 2>/dev/null || true
 
 # Common server administrators (fleet-wide break-glass accounts). Stored in
 # the DC hardening.sh (COMMON_USERS=...) so every future VM of this platform

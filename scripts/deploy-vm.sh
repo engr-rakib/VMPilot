@@ -22,6 +22,7 @@ set -euo pipefail
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --no-lan   # leave NICs disconnected
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --lan-up   # connect NICs + wait IP only
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --no-clean  # keep decrypted .auto.tfvars
+#   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --pipeline # show this VM's pipeline history
 #
 # Exit codes: 0 = deployed + LAN + hardening OK · 1 = error · 3 = VM deployed
 # but HARDENING FAILED (marker deploy/<srv>/<vc>/<env>/.hardening-<vm>.failed;
@@ -76,6 +77,7 @@ shift 3
 RESYNC="auto"   # auto (apply policy on drift) | plan (preview) | off
 LANUP_ONLY=false  # --lan-up: skip terraform, just connect NICs + wait IP
 NO_LAN=false      # --no-lan: deploy but leave NICs disconnected (LAN up later)
+SHOW_PIPE=false   # --pipeline: print this VM's pipeline log and exit
 for arg in "$@"; do
   case "$arg" in
     --plan)       MODE="plan"; RESYNC="plan" ;;
@@ -83,6 +85,7 @@ for arg in "$@"; do
     --no-sync)    RESYNC="off" ;;
     --lan-up)     LANUP_ONLY=true ;;
     --no-lan)     NO_LAN=true ;;
+    --pipeline)   SHOW_PIPE=true ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
 done
@@ -93,6 +96,17 @@ vdir_for() {
   local _r="${ROOT_DIR:-.}"; if [ -d "${_r}/$1/${2##*_}/$2" ]; then echo "$1/${2##*_}/$2"; else echo "$1/$2"; fi
 }
 ENV_DIR="${ROOT_DIR}/$(vdir_for deploy "$VCENTER")/${ENV}"
+# Per-VM pipeline log: EVERY STEP marker of EVERY run appends here (host-side
+# lifecycle history). CLI: --pipeline prints it; UI parses the same lines.
+PIPELINE_LOG="${ENV_DIR}/.pipeline-${VM_NAME}.log"
+if [ "$SHOW_PIPE" = true ]; then
+  if [ -f "$PIPELINE_LOG" ]; then
+    grep -a ":: STEP" "$PIPELINE_LOG" | tail -60
+  else
+    echo "no pipeline history yet for ${VM_NAME} (runs here after the first deploy)"
+  fi
+  exit 0
+fi
 CONFIG_FILE=""
 for f in "${ENV_DIR}"/vm-${VM_NAME}_*.tfvars; do
   [ -f "$f" ] && CONFIG_FILE="$f"
@@ -104,6 +118,7 @@ if [ -z "$CONFIG_FILE" ]; then
   echo "  Generate one with: ./scripts/create-vm-config.sh ${VCENTER} ${ENV} ${VM_NAME}"
   exit 1
 fi
+pipeline_log_header "deploy-vm $VCENTER $ENV $VM_NAME"
 
 info "VM config: ${CONFIG_FILE}"
 
@@ -599,6 +614,16 @@ lan_up() {
       # (WebUI jobs display shows these — per-step PASS/FAIL/SKIP).
       echo "  --- hardening pipeline checks (${VM_NAME}) ---"
       ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "grep -h '^CHECK ' /var/log/vmpilot-hardening.log 2>/dev/null | tail -20" 2>/dev/null | sed 's/^/  /' || true
+      # Guest pipeline steps: provision (cloud-init) + harden markers → deploy
+      # output (parsed by the same :: STEP contract) + per-VM pipeline log.
+      _GUEST_STEPS="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "grep -ah ':: STEP' /var/log/cloud-init-output.log /var/log/vmpilot-hardening.log 2>/dev/null | tail -40" 2>/dev/null || true)"
+      if [ -n "$_GUEST_STEPS" ]; then
+        echo "  --- guest pipeline steps (${VM_NAME}) ---"
+        echo "$_GUEST_STEPS" | sed 's/^/  /'
+        if [ -n "${PIPELINE_LOG:-}" ]; then
+          echo "$_GUEST_STEPS" >> "$PIPELINE_LOG" 2>/dev/null || true
+        fi
+      fi
       pstep deploy-vm checks done
     else
       warn "hardening unreachable/failed (SSH key?) — run manually: sudo bash /etc/vmpilot/hardening.sh"
