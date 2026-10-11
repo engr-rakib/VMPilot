@@ -142,17 +142,10 @@ if [ -n "$TRACKED" ]; then
   pstep destroy state-backup done
 fi
 
-# ─── Step 1: remove from Terraform state ──────────────────────────────────
-if [ -n "$TRACKED" ]; then
-  ok "Removing from Terraform state: module.vm[\"${VM_NAME}\"]"
-  terraform -chdir="$TF_DIR" state rm -state="${STATE_FILE}" \
-    "${VM_RESOURCE}" ${IPAM_RESOURCE} >/dev/null 2>&1 || \
-    terraform -chdir="$TF_DIR" state rm -state="${STATE_FILE}" "${VM_RESOURCE}" >/dev/null
-  ok "Removed from state."
-  pstep destroy state-rm done
-fi
-
-# ─── Step 2: destroy the VM in vCenter via govc ───────────────────────────
+# ─── Step 1: destroy the VM in vCenter via govc FIRST ─────────────────────
+# State-rm comes AFTER verify-gone: if govc fails, the state entry (and the
+# backup) still describe reality — no orphaned live VM. Never delete
+# state-adjacent files while the VM may still exist.
 DECRYPT_SCRIPT="${SCRIPT_DIR}/sops-decrypt.sh"
 [ -f "$DECRYPT_SCRIPT" ] || { error "Missing: ${DECRYPT_SCRIPT}"; exit 1; }
 
@@ -182,23 +175,60 @@ if [ -n "${GOVC_URL:-}" ] && [ -n "${GOVC_USERNAME:-}" ] && [ -n "${GOVC_PASSWOR
   if [ -n "${CONFIG_FILE:-}" ] && [ -f "$CONFIG_FILE" ]; then
     export GOVC_DATACENTER="$(grep -oE '^datacenter[[:space:]]*=[[:space:]]*"[^"]+"' "$CONFIG_FILE" | head -1 | sed -E 's/.*"(.*)".*/\1/')"
   fi
-  if govc vm.destroy "${VM_NAME}" 2>/dev/null; then
+  # Resolve the bare name to ONE inventory path — never act on an ambiguous
+  # name (same-name VM in another folder/DC). 0 or 2+ matches = abort.
+  _MATCHES="$(govc find / -type m -name "${VM_NAME}" 2>/dev/null || true)"
+  _N="$(echo "$_MATCHES" | grep -c . || true)"
+  if [ "$_N" -gt 1 ]; then
+    error "Refusing destroy: name '${VM_NAME}' matches ${_N} VMs vCenter-wide (need 0 or 1). Matches:$(echo "$_MATCHES" | sed 's/^/\n  /')"
+    pstep destroy vcenter-destroy fail "ambiguous-name"
+    unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME GOVC_DATACENTER
+    exit 1
+  fi
+  if [ "$_N" = "0" ]; then
+    # Already gone from vCenter (stale state or never deployed): nothing to
+    # destroy — continue to state-rm + config handling below.
+    warn "VM '${VM_NAME}' not found in vCenter — treating as already gone."
+    pstep destroy vcenter-destroy skip "already-gone"
+    unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME GOVC_DATACENTER
+  else
+  _VMPATH="$(echo "$_MATCHES" | head -n1)"
+  info "Target (fingerprint):"
+  govc vm.info -e "$_VMPATH" 2>/dev/null | grep -E "^(Name|Power state|IP address|Host|Memory|CPU):" | sed 's/^/    /' || true
+  pstep destroy resolve done "${_VMPATH##*/vm/}"
+  if govc vm.destroy "$_VMPATH" 2>/dev/null; then
     ok "VM destroyed: ${VM_NAME}"
   else
     warn "govc vm.destroy reported a problem — verifying whether ${VM_NAME} is really gone…"
   fi
   # Never delete state-adjacent files while the VM still exists: verify gone.
   if govc find / -type m -name "${VM_NAME}" 2>/dev/null | grep -q .; then
-    error "VM '${VM_NAME}' STILL EXISTS in vCenter — destroy failed. Config file KEPT. Fix vCenter first, then re-run."
+    error "VM '${VM_NAME}' STILL EXISTS in vCenter — destroy failed. State + config KEPT. Fix vCenter first, then re-run."
     pstep destroy vcenter-destroy fail "still-exists"
+    unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME GOVC_DATACENTER
     exit 1
   fi
   ok "Verified gone from vCenter: ${VM_NAME}"
   pstep destroy vcenter-destroy done
+  unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME GOVC_DATACENTER
+  fi
 else
-  warn "Skipping govc destroy — credentials unavailable."
+  # No credentials = cannot verify anything: ABORT before touching state or
+  # config (previously the script deleted the config while the VM still ran).
+  error "Cannot destroy without credentials — state + config KEPT. Decrypt creds and re-run."
   pstep destroy vcenter-destroy skip "no-creds"
-  pstep destroy vcenter-destroy skip "no-creds"
+  pstep destroy pipeline fail "no-creds-abort"
+  exit 1
+fi
+
+# ─── Step 2: remove from Terraform state (VM is verifiably gone) ───────────
+if [ -n "$TRACKED" ]; then
+  ok "Removing from Terraform state: module.vm[\"${VM_NAME}\"]"
+  terraform -chdir="$TF_DIR" state rm -state="${STATE_FILE}" \
+    "${VM_RESOURCE}" ${IPAM_RESOURCE} >/dev/null 2>&1 || \
+    terraform -chdir="$TF_DIR" state rm -state="${STATE_FILE}" "${VM_RESOURCE}" >/dev/null
+  ok "Removed from state."
+  pstep destroy state-rm done
 fi
 
 # ─── Step 3: remove the per-VM config file (unless kept) ──────────────────

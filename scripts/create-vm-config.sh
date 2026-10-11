@@ -157,6 +157,8 @@ while true; do
   prompt_required VM_NAME "VM name (vCenter + hostname)" "${PRESET_VM_NAME:-${DEFAULT_VM_NAME:-myvm}}"
   if [[ "$VM_NAME" =~ \  ]]; then
     warn "VM name e space allowed na! Use hyphen instead (e.g. my-vm)."
+  elif [[ ! "$VM_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?$ ]]; then
+    warn "VM name must be 1-63 chars: letters, digits, hyphen, underscore (no dots/slashes/spaces)."
   else
     break
   fi
@@ -294,7 +296,11 @@ else
     warn "Invalid selection '${env_sel}' — enter 1..${i}."
   done
   if [ "$env_sel" = "$i" ]; then
-    prompt_required ENV "New env name (dev/prod/staging/qa/...)" ""
+    while true; do
+      prompt_required ENV "New env name (dev/prod/staging/qa/...)" ""
+      if [[ "$ENV" =~ ^[a-z0-9]([a-z0-9_-]{0,30}[a-z0-9])?$ ]]; then break; fi
+      warn "Env must be lowercase letters/digits/hyphen (no slashes, dots, spaces)."
+    done
     ENV="${ENV// /_}"
   else
     ENV="${ENVS[$((env_sel-1))]}"
@@ -1487,7 +1493,7 @@ fi
 EXTRA_USERS=()
 info "Additional OS users (create VM owner accounts)"
 if [ -n "${DEFAULT_EXTRA_USER_PASSWORD}" ]; then
-  echo "  Default password: ${DEFAULT_EXTRA_USER_PASSWORD} (from ${SEC_REL}/vm-defaults.conf — user must change on first login)"
+  echo "  Default password: ******** (from ${SEC_REL}/vm-defaults.conf — user must change on first login)"
 else
   echo "  No default password set — accounts are SSH-key only (recommended)"
 fi
@@ -1568,7 +1574,7 @@ while true; do
     EXTRA_USERS+=("${_u}:${extra_groups}")
   done
   if [ -n "${DEFAULT_EXTRA_USER_PASSWORD}" ]; then
-    ok "Added ${_new_users[*]} (groups: ${extra_groups}, password: ${DEFAULT_EXTRA_USER_PASSWORD} — change on first login)"
+    ok "Added ${_new_users[*]} (groups: ${extra_groups}, password: ******** — change on first login)"
   else
     ok "Added ${_new_users[*]} (groups: ${extra_groups}, SSH-key only, no password)"
   fi
@@ -1902,6 +1908,7 @@ ${NEW_ENTRY}
 }
 PERVM
 set +o noclobber
+chmod 600 "$CONFIG_FILE" 2>/dev/null || true
 ok "Created ${CONFIG_FILE}"
 pstep create-vm-config pipeline done "${VM_NAME}"
 

@@ -650,8 +650,17 @@ lan_up() {
 }
 
 # ─── Credentials ──────────────────────────────────────────────────────────
+# Trap BEFORE decrypt: no window where Ctrl-C leaves plaintext on disk.
+# Same trap covers --lan-up (multi-minute SSH waits).
 DECRYPT_SCRIPT="${SCRIPT_DIR}/sops-decrypt.sh"
 [ -f "$DECRYPT_SCRIPT" ] || { error "Missing: ${DECRYPT_SCRIPT}"; exit 1; }
+cleanup() {
+  rm -f "${COMBINED:-}" 2>/dev/null || true
+  if [ -n "${DECRYPT_SCRIPT:-}" ]; then
+    bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" --clean >/dev/null 2>&1 || true
+  fi
+}
+trap 'cleanup' EXIT
 if [ "$LANUP_ONLY" = true ]; then
   LANUP_SKIP_GATE=true
   bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV"
@@ -663,12 +672,6 @@ if [ "$LANUP_ONLY" = true ]; then
   exit "$_lan_rc"
 fi
 bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV"
-
-cleanup() {
-  rm -f "$COMBINED"
-  bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" --clean
-}
-trap 'cleanup' EXIT
 
 # ─── Terraform ────────────────────────────────────────────────────────────
 VAR_FILE="${COMBINED#${ROOT_DIR}/}"
@@ -712,6 +715,21 @@ if [ "$MODE" = "plan" ]; then
     -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}"
   pstep deploy-vm plan done
 else
+  # Pre-apply rollback snapshot: state + config, stamped. Rollback =
+  # restore both files (commands printed) + `terraform refresh` (or re-apply
+  # the previous config). Kept 30 days alongside pre-destroy backups.
+  _BKDIR="${ROOT_DIR}/backups"
+  mkdir -p "$_BKDIR" 2>/dev/null || true
+  _STAMP="$(date +%Y%m%d-%H%M%S)"
+  _BKSTATE="${_BKDIR}/pre-deploy-${VCENTER}-${ENV}-${VM_NAME}-${_STAMP}.tfstate"
+  _BKCFG="${_BKDIR}/pre-deploy-${VCENTER}-${ENV}-${VM_NAME}-${_STAMP}.tfvars"
+  [ -f "$STATE_FILE" ] && cp "$STATE_FILE" "$_BKSTATE" 2>/dev/null || true
+  [ -f "$CONFIG_FILE" ] && cp "$CONFIG_FILE" "$_BKCFG" 2>/dev/null || true
+  if [ -f "$_BKSTATE" ] || [ -f "$_BKCFG" ]; then
+    info "Rollback snapshot: $(basename "${_BKSTATE:-<no-state>}") + $(basename "${_BKCFG:-<no-config>}")"
+    echo "  Rollback: cp backups/<file>.tfstate ${STATE_FILE#${ROOT_DIR}/} && cp backups/<file>.tfvars <config> && terraform -chdir=terraform refresh -state=${STATE_FILE#${ROOT_DIR}/}"
+    pstep deploy-vm backup done "${_STAMP}"
+  fi
   info "Applying: ${VM_NAME}"
   pstep deploy-vm apply start
   terraform -chdir="$TF_DIR" apply -auto-approve \
@@ -735,7 +753,10 @@ else
   # The IPAM assigns the next free IP at apply time; reflect that back in
   # the per-VM config (ip_address + filename) so the file stays in sync
   # with reality and future deploys/renews pick the same IP via skip_ip.
+  # Also record the last-APPLIED ip (.last-ip-<vm>) — deploy-sync R3 compares
+  # the file against THIS (state outputs report null for guestinfo-set IPs).
   if [ -n "$ASSIGNED_IP" ]; then
+    echo "$ASSIGNED_IP" > "${ENV_DIR}/.last-ip-${VM_NAME}" 2>/dev/null || true
     CUR_IP="$(grep -oE 'ip_address[[:space:]]*=[[:space:]]*"[0-9.]+"' "$CONFIG_FILE" | grep -oE '[0-9.]+' | head -n1 || true)"
     if [ -n "$CUR_IP" ] && [ "$CUR_IP" != "$ASSIGNED_IP" ]; then
       # Replace only the ip_address line inside this VM's entry block.
@@ -776,6 +797,7 @@ else
       fi
       warn "LAN auto-connect had issues (rc=${_lan_rc}) — retry manually (see above)"
     fi
+    unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME GOVC_DATACENTER 2>/dev/null || true
   fi
 fi
 

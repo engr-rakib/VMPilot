@@ -119,7 +119,7 @@ for vm in $(tracked_vm); do
   done
   if [ "$CFG_FOUND" = false ]; then
     if [ -z "${CFG_KEY[$vm]:-}" ]; then
-      if [ -n "$VCENTER_VMS" ] && ! grep -qE "/${vm}$" <<< "$VCENTER_VMS"; then
+      if [ -n "$VCENTER_VMS" ] && ! grep -qE "/$(printf '%s' "$vm" | sed 's/[^a-zA-Z0-9_-]/\\&/g')$" <<< "$VCENTER_VMS"; then
         if [ "$MODE" = "apply" ]; then
           warn "R5: VM '${vm}' not in vCenter and has no config — removing from state (stale entry)."
           terraform -chdir="$TF_DIR" state rm -state="$STATE_FILE" \
@@ -141,12 +141,17 @@ for vm in $(tracked_vm); do
 done
 
 # ─── R1/R2/R3: iterate config files ───────────────────────────────────────
+# R3 needs the last-APPLIED IP (.last-ip-<vm>, written by deploy-vm post-apply).
+# State outputs report null for guestinfo-set IPs, and comparing the file to
+# itself always "matches" (the old dead-code bug) — the marker file is truth.
 for host in "${!CFG_KEY[@]}"; do
   file="${CFG_FILE[$host]}"
   want_ip="${CFG_IP[$host]}"
   tracked_ip=""
-  # Reserved IPs come from the config files themselves (source of truth).
-  [ -n "$want_ip" ] && tracked_ip="$want_ip"
+  if [ -f "${ENV_DIR}/.last-ip-${host}" ]; then
+    tracked_ip="$(head -n1 "${ENV_DIR}/.last-ip-${host}" 2>/dev/null | tr -d ' \t\r\n' || true)"
+  fi
+  [ "$tracked_ip" = "null" ] && tracked_ip=""
 
   if grep -q '^module\.vm\["'$host'"\]' <<< "$STATE_LIST"; then
     # VM already tracked — but a hardening-failure marker means it is
@@ -159,8 +164,16 @@ for host in "${!CFG_KEY[@]}"; do
       pstep deploy-sync vm-skip done "${host}"
       SKIPPED=$((SKIPPED + 1))
       continue
+    elif [ -z "$tracked_ip" ]; then
+      # Legacy (pre-marker) tracked VM: adopt the current file IP as baseline
+      # instead of redeploying the fleet once — future edits ARE detected.
+      echo "$want_ip" > "${ENV_DIR}/.last-ip-${host}" 2>/dev/null || true
+      info "R2 skip: ${host}  (baseline adopted: ${want_ip})"
+      pstep deploy-sync vm-skip done "${host}"
+      SKIPPED=$((SKIPPED + 1))
+      continue
     else
-      info "R3 deploy: ${host}  (ip ${want_ip:-?} → next free)"
+      info "R3 deploy: ${host}  (ip ${tracked_ip} → ${want_ip})"
       pstep deploy-sync vm-deploy start "${host}"
     fi
   else
