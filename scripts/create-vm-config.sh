@@ -43,6 +43,10 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "${SCRIPT_DIR}/lib/common.sh"
 vmpilot_banner
+# Project root (CWD-independent): vdir_for MUST resolve against this, never ".".
+# Without it, running from any dir but the repo root silently falls back to the
+# flat layout and existing envs vanish from selection (only "Create NEW").
+ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Command-line presets for automation
 BATCH_MODE=false
