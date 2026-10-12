@@ -726,6 +726,13 @@ govc_pick() {
     done
   fi
   if [ "${#union[@]}" -gt 0 ]; then
+    # Single option (and not mark mode) = nothing to choose: auto-accept with
+    # one info line instead of a pointless prompt (DC fix pattern).
+    if [ "${#union[@]}" -eq 1 ] && [ "$mark" != "1" ]; then
+      printf -v "$4" '%s' "${union[0]}"
+      ok_inline "${label}: ${union[0]} (only option)"
+      return 0
+    fi
     # Node-scoped filter: when a node is pinned, only offer datastores/networks
     # that node can actually see. allow is a space-separated allow-list — but
     # port-group names can contain SPACES ("VM Network"), so a naive
@@ -782,8 +789,15 @@ govc_pick() {
 }
 
 info "vCenter resource selection"
-# Datacenter first — no GOVC_DATACENTER set yet; pick from discovered list
-govc_pick "Datacenter" "-type d" "$DEFAULT_DATACENTER" GOVC_DC_SEL
+# Datacenter first — but the entry already pins it (vcenter.tfvars datacenter):
+# if the pinned DC exists in vCenter, use it silently instead of re-asking.
+# (Re-asking every run is why operators pick the DC twice.)
+if [ -n "${DEFAULT_DATACENTER:-}" ] && govc find -type d -name "$DEFAULT_DATACENTER" 2>/dev/null | grep -q .; then
+  GOVC_DC_SEL="$DEFAULT_DATACENTER"
+  ok_inline "Datacenter: ${GOVC_DC_SEL} (from entry — use a different one via vcenter.tfvars)"
+else
+  govc_pick "Datacenter" "-type d" "$DEFAULT_DATACENTER" GOVC_DC_SEL
+fi
 export GOVC_DATACENTER="$GOVC_DC_SEL"
 
 # Now list within the selected datacenter (curated file lists + discovery merged)
