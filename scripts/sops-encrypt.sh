@@ -22,7 +22,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Usage: bash scripts/sops-encrypt.sh <vcenter> [plaintext-dir]
-#   Encrypts the secret <vcenter> credentials into secure/<vcenter>/*.tfvars.
+#   Encrypts the secret <vcenter> credentials into secure/<server>/<vcenter>/*.tfvars.
 #
 # Default plaintext source: .tmp-sops-plain/<vcenter>/   (git-ignored, safe)
 #   credentials.tfvars   -> vsphere_server / vsphere_user / vsphere_password / allow_unverified_ssl
@@ -39,7 +39,7 @@ cd "$(dirname "$0")/.."
 VCENTER="${1:-}"
 [ -n "$VCENTER" ] || { echo "Usage: $0 <vcenter> [plaintext-dir]"; exit 1; }
 SRC="${2:-.tmp-sops-plain/${VCENTER}}"
-DEST="secure/${VCENTER}"
+DEST="secure/${VCENTER##*_}/${VCENTER}"
 
 AGE_KEY="${SOPS_AGE_KEY_FILE:-$HOME/.config/sops/age/keys.txt}"
 if [ ! -f "$AGE_KEY" ]; then

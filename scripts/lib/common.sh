@@ -42,6 +42,8 @@ pstep() { # $1=script $2=phase $3=status [$4=detail]
 pipeline_log_header() { # $1=script-name (rest of $0/$* auto)
   [ -n "${PIPELINE_LOG:-}" ] || return 0
   echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) $1 ===" >> "$PIPELINE_LOG" 2>/dev/null || true
+  # Shared-runner writable: CLI (root) and server jobs (uid 1000) append alike.
+  chmod 666 "$PIPELINE_LOG" 2>/dev/null || true
 }
 
 # ─── Author banner ────────────────────────────────────────────────────────

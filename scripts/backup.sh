@@ -134,12 +134,62 @@ PROJECT_NAME="$(basename "$PROJECT_DIR")"
 do_backup() {
   local ts=$(date +"%Y%m%d-%H%M%S")
   local file="${BACKUP_DIR}/${PROJECT_NAME}-backup-${ts}.tar.gz"
+  local tmp_tar="${BACKUP_DIR}/.${PROJECT_NAME}-backup-${ts}.tar"
+  local stage=""
+  # Temp files never linger, even if tar fails mid-way.
+  trap 't=${tmp_tar:-}; [ -n "$t" ] && rm -f "$t"; s=${stage:-}; [ -n "$s" ] && rm -rf "$s"' EXIT
   info "Backup: ${file}"
-  tar -czf "$file" \
+  # ── Consistent SQLite snapshot ──────────────────────────────────────────
+  # The WebUI server writes webui.db continuously (samples/jobs). Tarring the
+  # live file prints "file changed as we read it" and can store a TORN
+  # (corrupt) database — and with `set -e` the warning's exit code aborts the
+  # whole backup. So: VACUUM INTO a snapshot inside the server container
+  # (transactionally consistent while the server keeps running), verify it
+  # with integrity_check, archive the snapshot AT the live DB's path, and
+  # exclude the live db/wal/shm/journal files from the tree walk.
+  local db_rel="vmpilot-webui/data/db/webui.db"
+  local db_exclude=""
+  if [ -f "${PROJECT_DIR}/${db_rel}" ]; then
+    stage="$(mktemp -d "${BACKUP_DIR}/.vmpilot-stage-XXXXXX")"
+    local dest="${stage}/${PROJECT_NAME}/vmpilot-webui/data/db/webui.db"
+    mkdir -p "$(dirname "$dest")"
+    if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "vmpilot-webui-server"; then
+      if docker exec vmpilot-webui-server node -e 'const db=new (require("node:sqlite").DatabaseSync)("/app/data/db/webui.db");db.exec(`VACUUM INTO '"'"'/tmp/vmpilot-backup-webui.db'"'"'`);const r=db.prepare("PRAGMA integrity_check").get();db.close();if(r.integrity_check!=="ok"){throw new Error("snapshot corrupt: "+r.integrity_check)}' >/dev/null 2>&1 \
+        && docker cp vmpilot-webui-server:/tmp/vmpilot-backup-webui.db "$dest" >/dev/null 2>&1; then
+        ok "SQLite snapshot: consistent DB copy taken (server kept running)"
+      else
+        warn "DB snapshot via container failed — falling back to live file copy"
+      fi
+      docker exec vmpilot-webui-server rm -f /tmp/vmpilot-backup-webui.db >/dev/null 2>&1 || true
+    else
+      warn "Server container not running — archiving a live DB copy (stop the server for guaranteed consistency)"
+      cp "${PROJECT_DIR}/${db_rel}" "$dest" 2>/dev/null || true
+    fi
+    if [ -f "$dest" ]; then
+      chmod 644 "$dest"
+      db_exclude="--exclude=${PROJECT_NAME}/vmpilot-webui/data/db/webui.db*"
+    else
+      warn "DB snapshot missing — live DB files will be archived as-is"
+    fi
+  fi
+  # ── Archive (uncompressed first so the snapshot can be appended) ─────────
+  # --warning=no-file-changed: append-only job/log files may grow mid-read;
+  # that must not abort the backup (the DB itself is already snapshotted).
+  # shellcheck disable=SC2086
+  tar -cf "$tmp_tar" \
     --exclude=.git --exclude=.terraform --exclude=.terraform.lock.hcl \
     --exclude='*.tar.gz' --exclude='*.zip' --exclude=node_modules \
     --exclude=__pycache__ --exclude=.DS_Store \
+    ${db_exclude:-} \
+    --warning=no-file-changed \
     -C "$(dirname "$PROJECT_DIR")" "$(basename "$PROJECT_DIR")"
+  if [ -n "$db_exclude" ]; then
+    tar -rf "$tmp_tar" -C "$stage" "${PROJECT_NAME}"
+  fi
+  gzip -c "$tmp_tar" > "$file"
+  rm -f "$tmp_tar"
+  [ -n "$stage" ] && rm -rf "$stage"
+  trap - EXIT
   ok "Done: $(basename "$file") ($(du -h "$file" | cut -f1))"
   # Rotation: keep max 5
   while [ $(ls -t "${BACKUP_DIR}/${PROJECT_NAME}-backup-"*.tar.gz 2>/dev/null | wc -l) -gt 5 ]; do
@@ -189,7 +239,32 @@ do_restore() {
     bn="$(basename "$sf")"
     cp "$sf" "${BACKUP_DIR}/pre-restore-${PROJECT_NAME}-$(date +%Y%m%d-%H%M%S).${bn}"
   done
+  # ── Container lifecycle + ownership ─────────────────────────────────────
+  # The tarball stores root-owned files. The WebUI server runs as uid 1000 —
+  # extracting over a live tree leaves a root-owned webui.db it cannot open
+  # (crash-loop: "unable to open database file") and replaces the DB under a
+  # running process. So: stop the server first, extract, fix ownership, start.
+  local was_running=0
+  if command -v docker >/dev/null 2>&1 && docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "vmpilot-webui-server"; then
+    was_running=1
+    info "Stopping WebUI server for restore..."
+    docker stop vmpilot-webui-server >/dev/null 2>&1 || true
+  fi
   tar -xzf "$file" -C "$(dirname "$PROJECT_DIR")"
+  if [ -d "${PROJECT_DIR}/vmpilot-webui/data" ]; then
+    chown -R 1000:1000 "${PROJECT_DIR}/vmpilot-webui/data"
+    [ -f "${PROJECT_DIR}/vmpilot-webui/data/ssh/id_ed25519" ] && chmod 600 "${PROJECT_DIR}/vmpilot-webui/data/ssh/id_ed25519"
+    ok "Ownership fixed: vmpilot-webui/data → uid 1000"
+  fi
+  if [ "$was_running" -eq 1 ]; then
+    docker start vmpilot-webui-server >/dev/null 2>&1 || true
+    sleep 6
+    if docker logs vmpilot-webui-server --tail 5 2>&1 | grep -q "listening on"; then
+      ok "Server restarted and listening"
+    else
+      err "Server may not be healthy — check: docker logs vmpilot-webui-server"
+    fi
+  fi
   ok "Restored: $(basename "$file")"
 }
 

@@ -133,6 +133,7 @@ fi
 
 # ─── Step 0: backup the state file ────────────────────────────────────────
 if [ -n "$TRACKED" ]; then
+  pstep destroy state-backup start
   BACKUP_DIR="${ROOT_DIR}/backups"
   mkdir -p "$BACKUP_DIR"
   STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -140,6 +141,8 @@ if [ -n "$TRACKED" ]; then
   cp "$STATE_FILE" "$STATE_BACKUP"
   ok "State backed up: $(basename "${STATE_BACKUP}")"
   pstep destroy state-backup done
+else
+  pstep destroy state-backup skip "not-in-state"
 fi
 
 # ─── Step 1: destroy the VM in vCenter via govc FIRST ─────────────────────
@@ -168,6 +171,7 @@ else
 fi
 
 if [ -n "${GOVC_URL:-}" ] && [ -n "${GOVC_USERNAME:-}" ] && [ -n "${GOVC_PASSWORD:-}" ]; then
+  pstep destroy vcenter-destroy start
   info "Destroying VM in vCenter: ${VM_NAME}"
   export GOVC_URL GOVC_USERNAME GOVC_PASSWORD GOVC_INSECURE=1 TERM=dumb
   # Multi-DC vCenters need an explicit datacenter scope (else govc refuses
@@ -241,6 +245,21 @@ elif [ -n "$CONFIG_FILE" ]; then
   pstep destroy config-delete skip "kept"
   pstep destroy config-delete skip "kept"
 fi
+
+# ─── Step 3b: remove this VM's dependent marker files ─────────────────────
+# Per-VM only (.last-ip-<vm> = IP memory for sync R3, .hardening-<vm>.failed
+# = unhardened marker that would flag the NEXT deploy, .pipeline-<vm>.log =
+# history of a VM that no longer exists). Other VMs' files are never touched;
+# `rm -f` makes it a no-op when a marker is already absent.
+_dep_removed=0
+for _dep in "${ENV_DIR}/.last-ip-${VM_NAME}" "${ENV_DIR}/.hardening-${VM_NAME}.failed" "${PIPELINE_LOG}"; do
+  if [ -f "$_dep" ]; then
+    rm -f "$_dep"
+    ok "Marker removed: ${_dep#${ROOT_DIR}/}"
+    _dep_removed=$((_dep_removed + 1))
+  fi
+done
+pstep destroy markers-clean "$([ "$_dep_removed" -gt 0 ] && echo done || echo skip)" "${_dep_removed} marker file(s)"
 
 echo ""
 echo "=========================================================="

@@ -19,7 +19,7 @@ set -euo pipefail
 #            * Web UI (catalog/executor)   → `options` mode feeds dropdowns;
 #              `live` mode feeds dashboard / monitoring / charts.
 #
-#            Source of truth: secure/<vcenter>/vcenter.tfvars (cached at
+#            Source of truth: secure/<server>/<vcenter>/vcenter.tfvars (cached at
 #            vcenter-setup.sh time). govc is used ONLY to fill options the file
 #            does not know yet (brand-new node/network/datastore) and for live
 #            monitoring data — never as the primary source.
@@ -30,7 +30,7 @@ set -euo pipefail
 #   scripts/vcenter-inventory.sh <vcenter> options [--json]
 #   scripts/vcenter-inventory.sh <vcenter> live vms|hosts|datastores|alarms [--json]
 #
-#   <key> for `list`: dc|cluster|template|datastore|network|resource_pool|host
+#   <key> for `list`: dc|cluster|template|datastore|network|resource_pool|host|dvs
 #
 #   Output (stdout): newline-separated names by default; --json emits an array
 #   (options/live always emit JSON).
@@ -67,11 +67,25 @@ done
 # ---------------------------------------------------------------------------
 # 0. paths + credential env (govc ready only when creds decrypt cleanly)
 # ---------------------------------------------------------------------------
-INV_FILE="${ROOT_DIR}/secure/${VCENTER}/vcenter.tfvars"
-CRED_FILE="${ROOT_DIR}/secure/${VCENTER}/credentials.tfvars"
+# Nested layout: secure/<srv>/<vc>/ + deploy/<srv>/<vc>/ (tolerant reads).
+vdir_for() {
+  local _r="${ROOT_DIR:-.}"; if [ -d "${_r}/$1/${2##*_}/$2" ]; then echo "$1/${2##*_}/$2"; else echo "$1/$2"; fi
+}
+SEC_D="$(vdir_for secure "$VCENTER")"
+INV_FILE="${ROOT_DIR}/${SEC_D}/vcenter.tfvars"
+CRED_FILE="${ROOT_DIR}/${SEC_D}/credentials.tfvars"
+[ -f "$CRED_FILE" ] || CRED_FILE="${ROOT_DIR}/secure/${VCENTER##*_}/credentials.tfvars"
 
 GOVC_READY=false
-if [ -f "$CRED_FILE" ] && command -v govc &>/dev/null; then
+# Explicit env credentials first (Web UI Discover flow for not-yet-saved
+# vCenters — nothing is read from disk; never logged/persisted).
+if [ -n "${GOVC_URL:-}" ] && [ -n "${GOVC_USERNAME:-}" ] && [ -n "${GOVC_PASSWORD:-}" ] && command -v govc &>/dev/null; then
+  export GOVC_INSECURE=true
+  export GOVC_PERSIST_SESSION=false
+  export TERM=dumb
+  GOVC_READY=true
+fi
+if ! $GOVC_READY && [ -f "$CRED_FILE" ] && command -v govc &>/dev/null; then
   VCREAD="cat"
   command -v sops &>/dev/null && VCREAD="sops --decrypt"
   CRED_CONTENT=$($VCREAD "$CRED_FILE" 2>/dev/null) || CRED_CONTENT=""
@@ -94,7 +108,7 @@ if [ -f "$CRED_FILE" ] && command -v govc &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# 1. cache readers — parse secure/<vc>/vcenter.tfvars (same format the CLI and
+# 1. cache readers — parse secure/<srv>/<vc>/vcenter.tfvars (same format the CLI and
 #    vcenter-setup.sh write). All values land in *_CACHE arrays / maps.
 # ---------------------------------------------------------------------------
 DC=""; DOMAIN=""; GATEWAY=""; NETMASK=24; BASE_IP=""
@@ -208,7 +222,7 @@ discover_list() { # $1 = govc find type flag: c|s|n|m|p|h|d
   fi
   [ "$t" = "m" ] && extra="-config.template true"
   out=$(govc find . -type "$t" $extra 2>/dev/null | sed 's|.*/||' || true)
-  if [ "$t" = "n" ]; then
+  if [ "$t" = "n" ] || [ "$t" = "g" ]; then
     # Distributed-switch uplink bundles are not VM port groups — never offer.
     out=$(printf '%s\n' "$out" | grep -vE 'DVUplinks' || true)
   fi
@@ -251,6 +265,7 @@ list)
     network|networks) LIST_KEY=network ;;
     resource_pool|resource_pools) LIST_KEY=resource_pool ;;
     host|hosts) LIST_KEY=host ;;
+    dvs|dswitch) LIST_KEY=dvs ;;
     *) echo "Error: unknown list key '${POS[0]:-}'" >&2; exit 1 ;;
   esac
 
@@ -265,9 +280,10 @@ list)
       template)      CACHE_ARRAY=("${TEMPLATES_CACHE[@]}") ;;
       datastore)     CACHE_ARRAY=("${DATASTORES_CACHE[@]}") ;;
       network)       CACHE_ARRAY=("${NETWORKS_CACHE[@]}") ;;
-      resource_pool) CACHE_ARRAY=("${POOLS_CACHE[@]}") ;;
-      host)          CACHE_ARRAY=("${HOSTS_CACHE[@]}") ;;
-    esac
+    resource_pool)       CACHE_ARRAY=("${POOLS_CACHE[@]}") ;;
+    host)          CACHE_ARRAY=("${HOSTS_CACHE[@]}") ;;
+    dvs)           CACHE_ARRAY=() ;;
+  esac
   fi
   case "$LIST_KEY" in
     dc)            DISCOVER_ARRAY=("$(discover_list d)") ;;
@@ -277,13 +293,69 @@ list)
     network)       mapfile -t DISCOVER_ARRAY < <(discover_list n) ;;
     resource_pool) mapfile -t DISCOVER_ARRAY < <(discover_list p) ;;
     host)          mapfile -t DISCOVER_ARRAY < <(discover_list h) ;;
+    dvs)           mapfile -t DISCOVER_ARRAY < <(discover_list g) ;;
   esac
   union_array RESULT CACHE_ARRAY DISCOVER_ARRAY
   if $JSON_OUT; then
-    jq -cn --argjson a "$(printf '%s\n' "${RESULT[@]:-}" | jq -R . | jq -s .)" '$a'
+    # Empty result must be [] — printf of an empty array yields one blank
+    # line which jq -R turns into [""], poisoning API consumers.
+    if [ "${#RESULT[@]}" -eq 0 ]; then echo "[]"
+    else jq -cn --argjson a "$(printf '%s\n' "${RESULT[@]}" | jq -R . | jq -s .)" '$a'
+    fi
   else
     printf '%s\n' "${RESULT[@]:-}"
   fi
+  ;;
+
+# ───────────────────────────────────────────────────────────────────────────
+# check — fast credential/reachability probe (UI Discover fail-fast): exits 0
+# with server identity when govc authenticates, non-zero otherwise. An empty
+# options bundle must NEVER read as success (wrong password looked "reachable").
+# ───────────────────────────────────────────────────────────────────────────
+check)
+  if ! $GOVC_READY; then echo '{"ok":false,"error":"govc unavailable"}' >&2; exit 1; fi
+  ABOUT_JSON=$(govc about -json 2>/dev/null | jq -c '(.about // .) | {name:(.name//.Name//""), version:(.version//.Version//"")}' 2>/dev/null || true)
+  # Name must be non-empty: a stale govc session cache can otherwise make a
+  # wrong password look reachable (empty identity = failure).
+  _aname=$(printf '%s' "$ABOUT_JSON" | jq -r '.name // ""' 2>/dev/null || true)
+  if [ -z "$ABOUT_JSON" ] || [ -z "$_aname" ] || [ "$ABOUT_JSON" = "{}" ] || [ "$ABOUT_JSON" = "null" ]; then
+    echo '{"ok":false,"error":"authentication failed — check server, user, password"}' >&2
+    exit 1
+  fi
+  printf '{"ok":true,"server":%s}\n' "$ABOUT_JSON"
+  ;;
+
+# ───────────────────────────────────────────────────────────────────────────
+# scan — fast platform pre-check (Add-Platform UI): server identity
+# (govc about) + datacenter list + per-DC inventory lists (names only —
+# host detail comes from Full Discover). Pure-live when called as `__scan`
+# (env creds, no files read); per-DC best-effort (one slow DC never blocks).
+# ───────────────────────────────────────────────────────────────────────────
+scan)
+  ABOUT_JSON="{}"
+  if $GOVC_READY; then
+    ABOUT_JSON=$(govc about -json 2>/dev/null | jq -c '(.about // .) | {name:(.name//.Name//""), version:(.version//.Version//""), build:(.build//.Build//""), os:(.osType//.OsType//""), vendor:(.vendor//.Vendor//"")}' 2>/dev/null || echo '{}')
+  fi
+  DC_NAMES=()
+  if $GOVC_READY; then
+    while IFS= read -r _d; do [ -n "$_d" ] && DC_NAMES+=("$_d"); done < <(discover_list d)
+  fi
+  DC_OBJS=()
+  for _dc in "${DC_NAMES[@]:-}"; do
+    [ -n "$_dc" ] || continue
+    DC_SCOPE="$_dc"
+    _jl() { discover_list "$1" | jq -R . | jq -s .; }
+    DC_OBJS+=("$(jq -cn --arg dc "$_dc" \
+      --argjson clusters "$(_jl c)" --argjson templates "$(_jl m)" \
+      --argjson datastores "$(_jl s)" --argjson networks "$(_jl n)" \
+      --argjson pools "$(_jl p)" --argjson hosts "$(_jl h)" \
+      '{dc:$dc, clusters:$clusters, templates:$templates, datastores:$datastores, networks:$networks, resource_pools:$pools, hosts:$hosts}')")
+  done
+  DC_SCOPE=""
+  jq -cn --argjson about "$ABOUT_JSON" \
+    --argjson dcs "$(printf '%s\n' "${DC_NAMES[@]:-}" | jq -R . | jq -s .)" \
+    --argjson perDc "$(printf '%s\n' "${DC_OBJS[@]:-}" | jq -R . | jq -s . | jq -c 'map(fromjson?)')" \
+    '{server:$about, datacenters:$dcs, perDc:$perDc}'
   ;;
 
 # ───────────────────────────────────────────────────────────────────────────
@@ -310,7 +382,8 @@ options)
     [ "${#ITEMS_HOSTS[@]}"      -gt 0 ] || mapfile -t ITEMS_HOSTS < <(discover_list h)
     [ -n "$DC" ] || mapfile -t DC_LIST_RAW < <(discover_list d)
   fi
-  DC_LIST=("${DC:-}")
+  DC_LIST=()
+  [ -n "$DC" ] && DC_LIST=("$DC")
   if [ -n "${DC_LIST_RAW[0]:-}" ]; then
     DC="${DC_LIST_RAW[0]}"
     DC_LIST=("${DC_LIST_RAW[@]}")
@@ -404,7 +477,22 @@ live)
       mapfile -t VMS_PATHS < <(govc find . -type m 2>/dev/null | grep -v '^vm$' | sort -u || true)
       if [ "${#VMS_PATHS[@]}" -eq 0 ]; then echo "[]"; break; fi
       NAMES=()
-      for _p in "${VMS_PATHS[@]}"; do NAMES+=("$(basename "$_p")"); done
+      # Per-DC cards need each VM's datacenter: name → DC map from the
+      # absolute inventory path (/DC/vm/... or /DC/host/.../...) — 2nd component.
+      VM_DC_JSON="{}"
+      # Per-DC cards need each VM's datacenter: name → DC map from
+      # ABSOLUTE inventory paths only (/DC/vm/... or /DC/host/.../...).
+      # Relative paths (./vm/...) carry no DC — tag null, never guess
+      # (server keeps untagged rows so no VM ever disappears).
+      for _p in "${VMS_PATHS[@]}"; do
+        NAMES+=("$(basename "$_p")")
+        _dc=""
+        if [[ "$_p" == /* ]]; then
+          _dc=$(echo "$_p" | sed -E 's#^/##' | cut -d/ -f1)
+          case "$_dc" in vm|host|datastore|network|folder|"") _dc="";; esac
+        fi
+        [ -n "$_dc" ] && VM_DC_JSON=$(printf '%s' "$VM_DC_JSON" | jq -c --arg n "$(basename "$_p")" --arg dc "$_dc" '. + {($n): $dc}' 2>/dev/null || printf '%s' "$VM_DC_JSON")
+      done
       info=$(govc vm.info -json "${NAMES[@]}" 2>/dev/null || true)
       [ -n "$info" ] && [ "$info" != "{}" ] || { echo "[]"; break; }
       # VM network + disk I/O throughput — one batched metric.sample call (all
@@ -419,13 +507,14 @@ live)
       fi
       [ -z "$NETMAP_JSON" ] || [ "$NETMAP_JSON" = "null" ] && NETMAP_JSON="{}"
       [ -z "$DISKMAP_JSON" ] || [ "$DISKMAP_JSON" = "null" ] && DISKMAP_JSON="{}"
-      out=$(jq -c --argjson netmap "$NETMAP_JSON" --argjson diskmapper "$DISKMAP_JSON" '[ (.virtualMachines // .VirtualMachines // [])[]? |
+      out=$(jq -c --argjson netmap "$NETMAP_JSON" --argjson diskmapper "$DISKMAP_JSON" --argjson dcs "$VM_DC_JSON" '[ (.virtualMachines // .VirtualMachines // [])[]? |
         ( ( .name != null ) and ( .name != "" ) ) as $keep |
         .summary as $s |
         ($s.quickStats // {}) as $q |
         select($keep) |
          {name:.name,
           power:(.runtime.powerState // "unknown"),
+          datacenter:($dcs[.name] // null),
           template:(.config.template // false),
          cpu:($s.config.numCpu // null),
          memoryMB:($s.config.memorySizeMB // null),
@@ -445,7 +534,9 @@ live)
       ]' <<<"$info")
       printf '%s\n' "$out"
       mkdir -p "${ROOT_DIR}/.cache"
-      printf '%s\n' "$out" >"$LIVE_CACHE" || true
+      _tmp="$LIVE_CACHE.tmp.$RANDOM"
+      printf '%s\n' "$out" >"$_tmp" || true
+      mv -f "$_tmp" "$LIVE_CACHE" 2>/dev/null || true
       ;;
     hosts)
       declare -a H_ROWS H_PATHS hnets
@@ -512,6 +603,13 @@ live)
         hname=$(govc object.collect -s "$hp" name 2>/dev/null || true); [ -n "$hname" ] || hname=$(basename "$hp")
         hips=$(govc object.collect -json -s "$hp" config.network.vnic 2>/dev/null \
           | jq -r '[.[] | select((.spec.ip.ipAddress // "") != "") | .spec.ip.ipAddress] | unique | join(",")' 2>/dev/null || true)
+        # Management addressing per vNIC portgroup (EXACT gateway/subnet from
+        # the host route table — vCenter never stores per-portgroup addressing,
+        # but the host's own stack does). Used by setup autofill + UI VLAN rows.
+        hdefgw=$(govc object.collect -json -s "$hp" config.network.routeTableInfo 2>/dev/null \
+          | jq -r '[.. | objects | .ipRoute? // empty | if type == "array" then .[] else empty end | select(.prefixLength == 0) | (if (.gateway | type) == "object" then .gateway.ipAddress else .gateway end)?] | map(select(. != null and . != "" and . != "0.0.0.0")) | .[0] // ""' 2>/dev/null || true)
+        hmgmt=$(govc object.collect -json -s "$hp" config.network.vnic 2>/dev/null \
+          | jq -c --arg gw "$hdefgw" '[.[] | select((.spec.ip.ipAddress // "") != "" and ((.spec.ip.ipAddress // "") | test("^fe80:") | not) and ((.spec.ip.ipAddress // "") | test("^169\\.254\\.") | not)) | {portgroup: (.portgroup // .spec.portgroup // ""), ip: .spec.ip.ipAddress, mask: (.spec.ip.subnetMask // ""), gateway: $gw}] | map(select(.portgroup != ""))' 2>/dev/null || echo "[]")
         pgnames=$(govc object.collect -json -s "$hp" config.network.portgroup 2>/dev/null \
           | jq -r '[.[].spec.name] | unique | join(",")' 2>/dev/null || true)
         hostdvs=$(govc object.collect -json -s "$hp" config.network.proxySwitch 2>/dev/null \
@@ -561,26 +659,41 @@ live)
         _diskKB=$(awk -F'|' '{print $2}' <<<"$_io")
         [ -n "$_netKB" ] || _netKB=0
         [ -n "$_diskKB" ] || _diskKB=0
+        # Cluster = parent dir of the host path (/dc/host/<cluster>/<host>);
+        # standalone hosts sit directly under /dc/host → null cluster.
+        # Datacenter = FIRST component of ABSOLUTE paths only — relative
+        # paths carry no DC (tag null; server keeps untagged rows).
+        _hparent=$(basename "$(dirname "$hp")")
+        if [ "$_hparent" = "host" ]; then _hcluster=""; else _hcluster="$_hparent"; fi
+        _hdc=""
+        if [[ "$hp" == /* ]]; then
+          _hdc=$(echo "$hp" | sed -E 's#^/##' | cut -d/ -f1)
+          case "$_hdc" in vm|host|datastore|network|folder|"") _hdc="";; esac
+        fi
         H_ROWS+=("$(jq -cn --arg name "$hname" --arg ip "$hips" --arg id "$_moid" \
+          --arg cluster "$_hcluster" --arg dc "$_hdc" \
           --argjson cores "$_cores" --argjson mhz "$_mhz" \
           --argjson memBytes "$_memb" --argjson cpuUsageMHz "$_cpusg" --argjson memUsageMB "$_memsg" \
           --arg powerState "$_pw" --arg connectionState "$_conn" --arg overallStatus "$_status" \
           --arg bootTime "$_boot" \
           --argjson netKBps "$_netKB" --argjson diskKBps "$_diskKB" \
+          --argjson mgmt "$hmgmt" \
           --argjson ns "$(printf '%s\n' "${hnets[@]:-}" | jq -R . | jq -s .)" \
           --argjson ds "$(printf '%s\n' "${hds_names[@]:-}" | jq -R . | jq -s .)" \
-          '{name:$name, ip:$ip, id:$id, networks:$ns, datastores:$ds,
+          '{name:$name, ip:$ip, id:$id, datacenter:(if $dc == "" then null else $dc end), cluster:(if $cluster == "" then null else $cluster end), networks:$ns, datastores:$ds,
             cpuCores:$cores, cpuMhz:$mhz, memoryMB:($memBytes/1024/1024),
             cpuUsageMHz:$cpuUsageMHz, memUsageMB:$memUsageMB,
             powerState:$powerState, connectionState:$connectionState, overallStatus:$overallStatus,
             bootTime:$bootTime,
-            netKBps:$netKBps, diskKBps:$diskKBps}')")
+            netKBps:$netKBps, diskKBps:$diskKBps, mgmt:$mgmt}')")
       done
       out=$(printf '[%s]' "$(IFS=,; printf '%s' "${H_ROWS[*]:-}")")
       out="$(printf '%s\n' "$out" | jq -c '.')"
       printf '%s\n' "$out"
       mkdir -p "${ROOT_DIR}/.cache"
-      printf '%s\n' "$out" >"$LIVE_CACHE" || true
+      _tmp="$LIVE_CACHE.tmp.$RANDOM"
+      printf '%s\n' "$out" >"$_tmp" || true
+      mv -f "$_tmp" "$LIVE_CACHE" 2>/dev/null || true
       ;;
     datastores)
       ds_info=$(govc datastore.info -json 2>/dev/null || true)
@@ -591,7 +704,9 @@ live)
       fi
       printf '%s\n' "$out"
       mkdir -p "${ROOT_DIR}/.cache"
-      printf '%s\n' "$out" >"$LIVE_CACHE" || true
+      _tmp="$LIVE_CACHE.tmp.$RANDOM"
+      printf '%s\n' "$out" >"$_tmp" || true
+      mv -f "$_tmp" "$LIVE_CACHE" 2>/dev/null || true
       ;;
     alarms)
       # vCenter-triggered alarms (AlarmManager.triggeredAlarms) — the SAME
@@ -600,7 +715,26 @@ live)
       # entity so the WebUI can surface them without re-querying vCenter.
       # For host-scoped alarms the entity MOID is resolved to a name (the
       # deep-link target in Inventory).
-      alarm_info=$(govc alarms -json 2>/dev/null || true)
+      # SCOPING (multi-DC): `govc alarms` is vCenter-WIDE — without scoping,
+      # every entry's card would show every other DC's alarms. Split rows
+      # into DC-scoped (entity lives under this entry's datacenter) and
+      # server-level (vCenter root objects — shown tagged, resolve-tracked).
+      # Other-DC alarms are dropped. Zero extra cost beyond the cached 60s
+      # live window (same LIVE_CACHE mechanism).
+      dc=$(scoped_dc)
+      _full=$(govc alarms -json 2>/dev/null || echo "[]")
+      _full=$(jq -c 'if . == null then [] else . end' <<<"$_full" 2>/dev/null || echo "[]")
+      _selfKeys=""; _unionKeys=""
+      if [ -n "$dc" ]; then
+        _selfKeys=$(govc alarms -json "/${dc}" 2>/dev/null | jq -r '. // [] | .[]? | "\(.alarm.value // ""):\(.entity.value // "")"' 2>/dev/null || true)
+        _unionKeys="$_selfKeys"
+        while IFS= read -r _dcn; do
+          [ -n "$_dcn" ] || continue
+          _unionKeys=$(printf '%s\n%s' "$_unionKeys" "$(govc alarms -json "/${_dcn}" 2>/dev/null | jq -r '. // [] | .[]? | "\(.alarm.value // ""):\(.entity.value // "")"' 2>/dev/null || true)")
+        done < <(govc find / -type d 2>/dev/null | sed 's|.*/||' || true)
+      fi
+      _inKeys() { [ -n "$2" ] && printf '%s\n' "$2" | grep -Fxq "$1"; }
+      alarm_info="$_full"
       if [ -z "$alarm_info" ]; then
         out="[]"
       else
@@ -616,19 +750,30 @@ live)
           _ep=$(jq -r '(.path // "")' <<<"$_entry")
           _msg=$(jq -r '(.event.fullFormattedMessage // "")' <<<"$_entry")
           [ "$_status" = "green" ] && continue
+          _key="${_am}:${_em}"
+          _scope="dc"
+          if [ -n "$dc" ]; then
+            if _inKeys "$_key" "$_selfKeys"; then _scope="dc"
+            elif _inKeys "$_key" "$_unionKeys"; then continue
+            else _scope="server"
+            fi
+          fi
           _ename=""
           [ "$_et" = "HostSystem" ] || [ "$_et" = "VirtualMachine" ] && _ename=$(govc object.collect -s "${_et}:${_em}" name 2>/dev/null || true)
           A_ROWS+=("$(jq -cn --arg name "$_name" --arg status "$_status" --arg time "$_time" \
+            --arg scope "$_scope" \
             --arg alarmId "$_am" --arg entityMoid "$_em" --arg entityType "$_et" --arg entityPath "$_ep" \
             --arg entityName "$_ename" --arg message "$_msg" \
-            '{name:$name, status:$status, time:$time, alarmId:$alarmId, entityMoid:$entityMoid, entityType:$entityType, entityPath:$entityPath, entityName:$entityName, message:$message}')")
+            '{name:$name, status:$status, time:$time, scope:$scope, alarmId:$alarmId, entityMoid:$entityMoid, entityType:$entityType, entityPath:$entityPath, entityName:$entityName, message:$message}')")
         done < <(jq -c '.[]?' <<<"$alarm_info")
         out=$(printf '[%s]' "$(IFS=,; printf '%s' "${A_ROWS[*]:-}")")
         out="$(printf '%s\n' "$out" | jq -c '.')"
       fi
       printf '%s\n' "$out"
       mkdir -p "${ROOT_DIR}/.cache"
-      printf '%s\n' "$out" >"$LIVE_CACHE" || true
+      _tmp="$LIVE_CACHE.tmp.$RANDOM"
+      printf '%s\n' "$out" >"$_tmp" || true
+      mv -f "$_tmp" "$LIVE_CACHE" 2>/dev/null || true
       ;;
     *)
       echo "{\"ok\":false,\"error\":\"unknown live type '${LIVE_WHAT}'\"}" >&2

@@ -442,6 +442,8 @@ COMBINED="${ENV_DIR}/.deploy-combined.tfvars"
   # operator hardening script (DC + env concatenated, terraform-escaped)
   build_hardening_script
 } > "$COMBINED"
+# Shared-runner writable (CLI root and uid-1000 server jobs both rewrite it).
+chmod 666 "$COMBINED" 2>/dev/null || true
 
 N=$(grep -cE '^[[:space:]]+[a-zA-Z0-9_-]+ = \{' "$COMBINED" || true)
 info "Combined config: ${N} VM entry/ies (vcenter '${VCENTER}', env '${ENV}', own state)"
@@ -757,6 +759,7 @@ else
   # the file against THIS (state outputs report null for guestinfo-set IPs).
   if [ -n "$ASSIGNED_IP" ]; then
     echo "$ASSIGNED_IP" > "${ENV_DIR}/.last-ip-${VM_NAME}" 2>/dev/null || true
+    chmod 666 "${ENV_DIR}/.last-ip-${VM_NAME}" 2>/dev/null || true
     CUR_IP="$(grep -oE 'ip_address[[:space:]]*=[[:space:]]*"[0-9.]+"' "$CONFIG_FILE" | grep -oE '[0-9.]+' | head -n1 || true)"
     if [ -n "$CUR_IP" ] && [ "$CUR_IP" != "$ASSIGNED_IP" ]; then
       # Replace only the ip_address line inside this VM's entry block.

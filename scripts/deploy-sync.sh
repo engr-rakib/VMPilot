@@ -168,6 +168,7 @@ for host in "${!CFG_KEY[@]}"; do
       # Legacy (pre-marker) tracked VM: adopt the current file IP as baseline
       # instead of redeploying the fleet once — future edits ARE detected.
       echo "$want_ip" > "${ENV_DIR}/.last-ip-${host}" 2>/dev/null || true
+      chmod 666 "${ENV_DIR}/.last-ip-${host}" 2>/dev/null || true
       info "R2 skip: ${host}  (baseline adopted: ${want_ip})"
       pstep deploy-sync vm-skip done "${host}"
       SKIPPED=$((SKIPPED + 1))
