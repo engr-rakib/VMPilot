@@ -161,8 +161,8 @@ while true; do
   prompt_required VM_NAME "VM name (vCenter + hostname)" "${PRESET_VM_NAME:-${DEFAULT_VM_NAME:-myvm}}"
   if [[ "$VM_NAME" =~ \  ]]; then
     warn "VM name e space allowed na! Use hyphen instead (e.g. my-vm)."
-  elif [[ ! "$VM_NAME" =~ ^[A-Za-z0-9]([A-Za-z0-9_-]{0,61}[A-Za-z0-9])?$ ]]; then
-    warn "VM name must be 1-63 chars: letters, digits, hyphen, underscore (no dots/slashes/spaces)."
+  elif [[ ! "$VM_NAME" =~ ^[a-z0-9]([a-z0-9_-]{0,61}[a-z0-9])?$ ]]; then
+    warn "VM name must be lowercase 1-63 chars: letters, digits, hyphen, underscore (terraform hostname rule — no uppercase/dots/slashes/spaces)."
   else
     break
   fi
