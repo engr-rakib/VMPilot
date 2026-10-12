@@ -633,7 +633,7 @@ lan_up() {
       # R2 must not treat it as done — clear with: hardening re-run (deploy
       # --lan-up) or manual run, which rm's this file on success.
       date -u +%Y-%m-%dT%H:%M:%SZ > "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
-      _HARDEN_FAILED=1
+      _HARDEN_FAILED=3
       pstep deploy-vm hardening fail "see-log"
     fi
     # Phase 5 (offline-boot safety): first boot without LAN means cloud-init's
@@ -712,10 +712,23 @@ done
 if [ "$MODE" = "plan" ]; then
   info "Planning: ${VM_NAME}"
   pstep deploy-vm plan start
+  _PLAN_LOG="$(mktemp "/tmp/vmpilot-plan-XXXXXX.log")"
+  set +e
   terraform -chdir="$TF_DIR" plan \
     -state="${STATE_FILE}" \
-    -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}"
+    -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}" 2>&1 | tee "${_PLAN_LOG}"
+  _TF_RC=${PIPESTATUS[0]}
+  set -e
+  if [ "${_TF_RC}" -ne 0 ]; then
+    _PLAN_ERR="$( { grep -m1 -A2 '^Error:' "${_PLAN_LOG}" 2>/dev/null || true; } | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
+    [ -n "$_PLAN_ERR" ] || _PLAN_ERR="terraform exited ${_TF_RC}"
+    echo "terraform plan failed (rc=${_TF_RC}): ${_PLAN_ERR}"
+    pstep deploy-vm plan fail "${_PLAN_ERR}"
+    rm -f "${_PLAN_LOG}"
+    exit "${_TF_RC}"
+  fi
   pstep deploy-vm plan done
+  rm -f "${_PLAN_LOG}"
 else
   # Pre-apply rollback snapshot: state + config, stamped. Rollback =
   # restore both files (commands printed) + `terraform refresh` (or re-apply
@@ -734,11 +747,30 @@ else
   fi
   info "Applying: ${VM_NAME}"
   pstep deploy-vm apply start
+  # Guarded: `set -e` would kill the script on a terraform failure BEFORE any
+  # marker was emitted, so the pipeline could only guess ("interrupted"). Emit a
+  # real fail marker with the first Error line → the UI shows the cause.
+  _APPLY_LOG="$(mktemp "/tmp/vmpilot-apply-XXXXXX.log")"
+  set +e
   terraform -chdir="$TF_DIR" apply -auto-approve \
     -state="${STATE_FILE}" \
-    -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}"
+    -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}" 2>&1 | tee "${_APPLY_LOG}"
+  _TF_RC=${PIPESTATUS[0]}
+  set -e
+  if [ "${_TF_RC}" -ne 0 ]; then
+    _APPLY_ERR="$( { grep -m1 -A2 '^Error:' "${_APPLY_LOG}" 2>/dev/null || true; } | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
+    [ -n "$_APPLY_ERR" ] || _APPLY_ERR="$( { grep -m1 -iE 'MonitorLoop|power on|reservation|insufficient' "${_APPLY_LOG}" 2>/dev/null || true; } | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
+    [ -n "$_APPLY_ERR" ] || _APPLY_ERR="$(tail -3 "${_APPLY_LOG}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
+    [ -n "$_APPLY_ERR" ] || _APPLY_ERR="terraform exited ${_TF_RC}"
+    # stdout (not stderr) so the executor's log capture always flushes it.
+    echo "terraform apply failed (rc=${_TF_RC}): ${_APPLY_ERR}"
+    pstep deploy-vm apply fail "${_APPLY_ERR}"
+    rm -f "${_APPLY_LOG}"
+    exit "${_TF_RC}"
+  fi
   ok "Done: ${VM_NAME} deployed"
   pstep deploy-vm apply done
+  rm -f "${_APPLY_LOG}"
 
   # ─── Print hostname + IP ────────────────────────────────────────
   # Source of truth = the per-VM config file's ip_address (deploy-vm.sh

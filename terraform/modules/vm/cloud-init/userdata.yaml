@@ -11,8 +11,9 @@ manage_etc_hosts: true
 ssh_authorized_keys:
   - ${ssh_public_key}
 
-%{ if length(extra_users) > 0 }
 users:
+  # Operator login is ALWAYS created (even with zero extra_users) — otherwise
+  # a config without extra users deploys a VM with no SSH login at all.
   - name: ubuntu
     ssh_authorized_keys:
       - ${ssh_public_key}
@@ -20,6 +21,7 @@ users:
     groups: [sudo, adm]
     lock_passwd: true
     shell: /bin/bash
+%{ if length(extra_users) > 0 }
 %{ for u in extra_users ~}
   - name: ${u.username}
 %{ if u.sudo != "" && u.sudo != "NONE" ~}
