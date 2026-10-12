@@ -1926,6 +1926,11 @@ ${NEW_ENTRY}
 }
 PERVM
 set +o noclobber
+# Secrets-safe AND server-readable: the file holds passwords + SSH keys, so it
+# must not stay world-readable — but bare `chmod 600` on a root-owned file
+# locks out uid-1000 server jobs ("Permission denied" on deploy). Chown to the
+# app user first (VMPILOT_APP_UID, default 1000 = server + host operator).
+chown "${VMPILOT_APP_UID:-1000}:${VMPILOT_APP_UID:-1000}" "$CONFIG_FILE" 2>/dev/null || true
 chmod 600 "$CONFIG_FILE" 2>/dev/null || true
 ok "Created ${CONFIG_FILE}"
 pstep create-vm-config pipeline done "${VM_NAME}"
