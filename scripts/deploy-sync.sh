@@ -30,6 +30,8 @@ set -euo pipefail
 #   ./scripts/deploy-sync.sh <vcenter> <env>       # scan + deploy new/changed
 #   ./scripts/deploy-sync.sh <vcenter> <env> --plan   # dry-run (plan each)
 #   ./scripts/deploy-sync.sh <vcenter> <env> --list   # only show the diff table
+#   ./scripts/deploy-sync.sh <vcenter> <env> --vm NAME # ONLY this VM (prod-safe:
+#     other VMs untouched, R5 skipped)
 # ===========================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -40,10 +42,25 @@ vmpilot_banner
 VCENTER="${1:-}"
 ENV="${2:-}"
 MODE="apply"
-[ $# -gt 2 ] && MODE="${3#--}"
+ONLY_VM=""
+if [ $# -gt 2 ]; then
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "${1:-}" in
+      --plan|plan|--list|list) MODE="$(echo "$1" | sed 's/^--//')" ;;
+      --vm) ONLY_VM="${2:-}"; [ $# -ge 2 ] && shift ;;
+      --vm=*) ONLY_VM="${1#--vm=}" ;;
+      *) warn "ignoring unknown arg: $1" ;;
+    esac
+    shift || true
+  done
+fi
 
 if [ -z "$VCENTER" ] || [ -z "$ENV" ]; then
-  die "Usage: $0 <vcenter> <env> [--plan|--list]"
+  die "Usage: $0 <vcenter> <env> [--plan|--list] [--vm NAME]"
+fi
+if [ -n "$ONLY_VM" ]; then
+  info "Scoped sync: ONLY '${ONLY_VM}' — other VMs untouched (no R5 scan)"
 fi
 
 TF_DIR="${ROOT_DIR}/terraform"
@@ -110,6 +127,8 @@ else
 fi
 
 for vm in $(tracked_vm); do
+  # Scoped mode: R5 is env-wide by nature — skip it entirely (zero touch).
+  [ -n "$ONLY_VM" ] && continue
   CFG_FOUND=false
   for file in "${ENV_DIR}"/vm-*.tfvars; do
     [ -f "$file" ] || continue
@@ -145,6 +164,8 @@ done
 # State outputs report null for guestinfo-set IPs, and comparing the file to
 # itself always "matches" (the old dead-code bug) — the marker file is truth.
 for host in "${!CFG_KEY[@]}"; do
+  # Scoped mode: only this VM is reconciled — the rest of the env is untouched.
+  if [ -n "$ONLY_VM" ] && [ "$host" != "$ONLY_VM" ]; then continue; fi
   file="${CFG_FILE[$host]}"
   want_ip="${CFG_IP[$host]}"
   tracked_ip=""
