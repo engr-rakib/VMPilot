@@ -552,6 +552,11 @@ lan_up() {
     # Fresh clone = new host keys: drop any stale known_hosts entry for this
     # IP, and never consult known_hosts (avoids MITM-fail on recycled IPs).
     ssh-keygen -R "$_ip" >/dev/null 2>&1 || true
+    # Stale ARP for a recycled IP sends our SYNs to a dead/wrong MAC while
+    # ping + Tools-IP look fine (proven 2026-10-13: 20 min of denies, guest
+    # healthy). Drop this IP's neighbor entry so the next packet re-resolves.
+    _arpdev="$(ip route get "$_ip" 2>/dev/null | grep -oP '(?<=dev )\S+' | head -1 || true)"
+    if [ -n "$_arpdev" ]; then ip neigh del "$_ip" dev "$_arpdev" >/dev/null 2>&1 || true; fi
     _i=0; _t0=$(date +%s); _last_err=""; _out=""
     _denied=0; _neterr=0
     # Fresh clone: cloud-init's disk/LVM stages can take 10-25 min on slow
@@ -580,7 +585,8 @@ lan_up() {
       fi
       sleep 20; _i=$((_i+1))
       if [ $((_i % 15)) -eq 0 ]; then
-        pstep deploy-vm ssh-gate start "waiting $(( $(date +%s) - _t0 ))s (neterr=${_neterr})"
+        _hbst=$(govc vm.info -json "$VM_NAME" 2>/dev/null | jq -r '[.virtualMachines[]? | "\(.runtime.powerState)/\(.guest.toolsStatus // "none")" ] | join(",")' 2>/dev/null || true)
+        pstep deploy-vm ssh-gate start "waiting $(( $(date +%s) - _t0 ))s (neterr=${_neterr}${_hbst:+,${_hbst}})"
       fi
     done
     info "LAN: SSH gate took $(( $(date +%s) - _t0 ))s over $((_i+1)) attempt(s)${_last_err:+; last error: ${_last_err}}"
@@ -597,6 +603,7 @@ lan_up() {
     _SSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 ubuntu@${_ip}"
     _boot1="$($_SSH "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
     _ci=""; _j=0; _t1=$(date +%s)
+    pstep deploy-vm cloud-init start
     while [ "$_j" -lt 60 ]; do
       _ci="$($_SSH "cloud-init status 2>/dev/null" 2>/dev/null || true)"
       case "$_ci" in
@@ -604,6 +611,9 @@ lan_up() {
         *error*) break;;
       esac
       sleep 20; _j=$((_j+1))
+      if [ $((_j % 15)) -eq 0 ]; then
+        pstep deploy-vm cloud-init start "waiting $(( $(date +%s) - _t1 ))s (${_ci:-no-ssh-yet})"
+      fi
     done
     _boot2="$($_SSH "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
     case "$_ci" in
