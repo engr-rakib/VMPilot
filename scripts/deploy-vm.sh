@@ -553,14 +553,38 @@ lan_up() {
     # IP, and never consult known_hosts (avoids MITM-fail on recycled IPs).
     ssh-keygen -R "$_ip" >/dev/null 2>&1 || true
     _i=0; _t0=$(date +%s); _last_err=""; _out=""
-    while [ "$_i" -lt 40 ]; do
-      _out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "echo SSH-READY" 2>/tmp/lanup-ssherr || true)"
-      _last_err="$(head -c 200 /tmp/lanup-ssherr 2>/dev/null || true)"
-      case "$_out" in *SSH-READY*) break;; esac
-      sleep 15; _i=$((_i+1))
+    _denied=0; _neterr=0
+    # Fresh clone: cloud-init's disk/LVM stages can take 10-25 min on slow
+    # storage BEFORE users/ssh are ready. Budget 30 min for network-level
+    # waits (port closed/refused) — but a DENIED key never heals by waiting:
+    # 5 consecutive denials fail fast with a key-focused message.
+    # Heartbeat markers keep the pipeline UI live during the wait.
+    pstep deploy-vm ssh-gate start
+    while [ "$_i" -lt 90 ]; do
+      if ! timeout 5 bash -c "</dev/tcp/${_ip}/22" 2>/dev/null; then
+        _last_err="port 22 closed/unreachable (attempt $((_i+1)))"
+        _neterr=$((_neterr+1)); _denied=0
+      else
+        _out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "echo SSH-READY" 2>/tmp/lanup-ssherr || true)"
+        _last_err="$(head -c 200 /tmp/lanup-ssherr 2>/dev/null || true)"
+        case "$_out" in *SSH-READY*) break;; esac
+        case "$_last_err" in
+          *"Permission denied"*) _denied=$((_denied+1)); _neterr=0;;
+          *) _neterr=$((_neterr+1)); _denied=0;;
+        esac
+        if [ "$_denied" -ge 5 ]; then
+          info "LAN: SSH key rejected 5x in a row — key/user wrong, waiting won't help"
+          pstep deploy-vm ssh-gate fail "key-denied"
+          break
+        fi
+      fi
+      sleep 20; _i=$((_i+1))
+      if [ $((_i % 15)) -eq 0 ]; then
+        pstep deploy-vm ssh-gate start "waiting $(( $(date +%s) - _t0 ))s (neterr=${_neterr})"
+      fi
     done
     info "LAN: SSH gate took $(( $(date +%s) - _t0 ))s over $((_i+1)) attempt(s)${_last_err:+; last error: ${_last_err}}"
-    pstep deploy-vm ssh-gate done "$((_i+1))-attempts"
+    if [ "$_i" -ge 90 ]; then pstep deploy-vm ssh-gate fail "timeout-1800s"; elif [ "$_denied" -ge 5 ]; then :; else pstep deploy-vm ssh-gate done "$((_i+1))-attempts"; fi
   fi
   # Phase 4 (best-effort): confirm cloud-init finished over SSH. Needs the
   # operator's key for ubuntu@IP (agent or ~/.ssh default) — failure here is
@@ -573,13 +597,13 @@ lan_up() {
     _SSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 ubuntu@${_ip}"
     _boot1="$($_SSH "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
     _ci=""; _j=0; _t1=$(date +%s)
-    while [ "$_j" -lt 40 ]; do
+    while [ "$_j" -lt 60 ]; do
       _ci="$($_SSH "cloud-init status 2>/dev/null" 2>/dev/null || true)"
       case "$_ci" in
         *done*) break;;
         *error*) break;;
       esac
-      sleep 15; _j=$((_j+1))
+      sleep 20; _j=$((_j+1))
     done
     _boot2="$($_SSH "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
     case "$_ci" in
@@ -593,7 +617,11 @@ lan_up() {
         fi
         ;;
       *error*) warn "cloud-init errored on ${VM_NAME}: ${_ci} — check: ssh ubuntu@${_ip} 'cloud-init status --long'";;
-      *) info "cloud-init status unconfirmed after $(( $(date +%s) - _t1 ))s (SSH key may differ) — check: ssh ubuntu@${_ip} 'cloud-init status'"; pstep deploy-vm cloud-init fail "unconfirmed";;
+      *) info "cloud-init status unconfirmed after $(( $(date +%s) - _t1 ))s (SSH key may differ) — check: ssh ubuntu@${_ip} 'cloud-init status'"; pstep deploy-vm cloud-init fail "unconfirmed";
+        # Guest session forensics: the VM's own provisioning log tail shows
+        # WHERE cloud-init stopped (deleted markers, runcmd errors, slow cp).
+        echo "  --- guest session tail (${VM_NAME}: cloud-init-output) ---"
+        $_SSH "tail -30 /var/log/cloud-init-output.log 2>/dev/null" 2>/dev/null | sed 's/^/  /' || true;;
     esac
     # Hardening (operator policy): runs HERE, after LAN+IP — never at first
     # boot (offline). Full network available, so apt-backed steps work.
