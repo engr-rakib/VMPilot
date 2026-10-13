@@ -467,6 +467,17 @@ echo "  --> targeting ONLY: ${VM_NAME}"
 # Auto-runs after apply; --no-lan skips it; --lan-up runs ONLY this.
 lan_up() {
   local _tf="${ROOT_DIR}/terraform/credentials.auto.tfvars"
+  # SSH identity (BatchMode offers only default ~/.ssh keys): the server runs
+  # uid-1000 with HOME redirected, so it HAS no default key — every
+  # server-driven SSH died "Permission denied" while CLI-as-root worked.
+  # Resolve once: explicit -i wins, default keys as fallback.
+  _SSH_ARR=(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10)
+  _VM_SSH_KEY=""
+  for _k in "${VMPILOT_SSH_KEY_FILE:-}" "$HOME/.ssh/id_ed25519" /app/data/ssh/id_ed25519 /root/.ssh/id_ed25519; do
+    [ -n "$_k" ] && [ -f "$_k" ] && { _VM_SSH_KEY="$_k"; break; }
+  done
+  [ -n "$_VM_SSH_KEY" ] && _SSH_ARR+=(-i "$_VM_SSH_KEY")
+  if [ -n "$_VM_SSH_KEY" ]; then info "LAN: SSH identity: ${_VM_SSH_KEY}"; else warn "LAN: no explicit SSH key found — falling back to default identities"; fi
   # Exit contract: 0 = LAN + hardening OK; 3 = VM up but hardening FAILED
   # (marker .hardening-<vm>.failed). Callers must propagate, not swallow.
   _HARDEN_FAILED=0
@@ -570,7 +581,7 @@ lan_up() {
         _last_err="port 22 closed/unreachable (attempt $((_i+1)))"
         _neterr=$((_neterr+1)); _denied=0
       else
-        _out="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "echo SSH-READY" 2>/tmp/lanup-ssherr || true)"
+        _out="$("${_SSH_ARR[@]}" "ubuntu@${_ip}" "echo SSH-READY" 2>/tmp/lanup-ssherr || true)"
         _last_err="$(head -c 200 /tmp/lanup-ssherr 2>/dev/null || true)"
         case "$_out" in *SSH-READY*) break;; esac
         case "$_last_err" in
@@ -601,12 +612,12 @@ lan_up() {
   # `cloud-init status` (no --wait) so each attempt is quick; SSH failures
   # mean "reboot in progress", retry. Track boot_id to log the reboot.
   if [ -n "$_ip" ]; then
-    _SSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 ubuntu@${_ip}"
-    _boot1="$($_SSH "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
+    _SSH=("${_SSH_ARR[@]}" "ubuntu@${_ip}")
+    _boot1="$("${_SSH[@]}" "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
     _ci=""; _j=0; _t1=$(date +%s); _gate_failed="${_gate_failed:-0}"
     pstep deploy-vm cloud-init start
     while [ "$_j" -lt 60 ]; do
-      _ci="$($_SSH "cloud-init status 2>/dev/null" 2>/dev/null || true)"
+      _ci="$("${_SSH[@]}" "cloud-init status 2>/dev/null" 2>/dev/null || true)"
       # Self-heal: if the SSH gate failed earlier (transient net/ARP class)
       # but SSH answers now, close the gate as recovered so the pipeline
       # stage reflects reality instead of a stale failure.
@@ -623,7 +634,7 @@ lan_up() {
         pstep deploy-vm cloud-init start "waiting $(( $(date +%s) - _t1 ))s (${_ci:-no-ssh-yet})"
       fi
     done
-    _boot2="$($_SSH "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
+    _boot2="$("${_SSH[@]}" "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
     case "$_ci" in
       *done*)
         if [ -n "$_boot1" ] && [ "$_boot1" != "$_boot2" ]; then
@@ -639,7 +650,7 @@ lan_up() {
         # Guest session forensics: the VM's own provisioning log tail shows
         # WHERE cloud-init stopped (deleted markers, runcmd errors, slow cp).
         echo "  --- guest session tail (${VM_NAME}: cloud-init-output) ---"
-        $_SSH "tail -30 /var/log/cloud-init-output.log 2>/dev/null" 2>/dev/null | sed 's/^/  /' || true;;
+        "${_SSH[@]}" "tail -30 /var/log/cloud-init-output.log 2>/dev/null" 2>/dev/null | sed 's/^/  /' || true;;
     esac
     # Hardening (operator policy): runs HERE, after LAN+IP — never at first
     # boot (offline). Full network available, so apt-backed steps work.
@@ -650,21 +661,21 @@ lan_up() {
     # before the single 25-min hardening run.
     _h=0
     while [ "$_h" -lt 12 ]; do
-      if ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "echo H-READY" 2>/dev/null | grep -q "H-READY"; then break; fi
+      if "${_SSH_ARR[@]}" "ubuntu@${_ip}" "echo H-READY" 2>/dev/null | grep -q "H-READY"; then break; fi
       sleep 15; _h=$((_h+1))
     done
-    if timeout 1500 ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "export VMPILOT_SSH_KEY='${_VMKEY}'; sudo bash -c 'bash /etc/vmpilot/hardening.sh >> /var/log/vmpilot-hardening.log 2>&1'; echo \"HARDEN_RC=\$?\"" 2>/dev/null | grep -q "HARDEN_RC=0"; then
+    if timeout 1500 "${_SSH_ARR[@]}" "ubuntu@${_ip}" "export VMPILOT_SSH_KEY='${_VMKEY}'; sudo bash -c 'bash /etc/vmpilot/hardening.sh >> /var/log/vmpilot-hardening.log 2>&1'; echo \"HARDEN_RC=\$?\"" 2>/dev/null | grep -q "HARDEN_RC=0"; then
       ok "hardening applied on ${VM_NAME} (see /var/log/vmpilot-hardening.log)"
       pstep deploy-vm hardening done
       rm -f "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
-      ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "printf '# VMPilot hardening manifest\n# Source: secure/<server>/<vcenter>/hardening.sh (+ <env>/hardening.sh)\ndate: %s\nscript_exit=0\nlog=/var/log/vmpilot-hardening.log\n' \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee /etc/vmpilot-hardening.md >/dev/null" 2>/dev/null || true
+      "${_SSH_ARR[@]}" "ubuntu@${_ip}" "printf '# VMPilot hardening manifest\n# Source: secure/<server>/<vcenter>/hardening.sh (+ <env>/hardening.sh)\ndate: %s\nscript_exit=0\nlog=/var/log/vmpilot-hardening.log\n' \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee /etc/vmpilot-hardening.md >/dev/null" 2>/dev/null || true
       # Pipeline checks: surface the guest VERIFY lines in deploy/job output
       # (WebUI jobs display shows these — per-step PASS/FAIL/SKIP).
       echo "  --- hardening pipeline checks (${VM_NAME}) ---"
-      ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "grep -h '^CHECK ' /var/log/vmpilot-hardening.log 2>/dev/null | tail -20" 2>/dev/null | sed 's/^/  /' || true
+      "${_SSH_ARR[@]}" "ubuntu@${_ip}" "grep -h '^CHECK ' /var/log/vmpilot-hardening.log 2>/dev/null | tail -20" 2>/dev/null | sed 's/^/  /' || true
       # Guest pipeline steps: provision (cloud-init) + harden markers → deploy
       # output (parsed by the same :: STEP contract) + per-VM pipeline log.
-      _GUEST_STEPS="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "grep -ah ':: STEP' /var/log/cloud-init-output.log /var/log/vmpilot-hardening.log 2>/dev/null | tail -40" 2>/dev/null || true)"
+      _GUEST_STEPS="$("${_SSH_ARR[@]}" "ubuntu@${_ip}" "grep -ah ':: STEP' /var/log/cloud-init-output.log /var/log/vmpilot-hardening.log 2>/dev/null | tail -40" 2>/dev/null || true)"
       if [ -n "$_GUEST_STEPS" ]; then
         echo "  --- guest pipeline steps (${VM_NAME}) ---"
         echo "$_GUEST_STEPS" | sed 's/^/  /'
@@ -686,7 +697,7 @@ lan_up() {
     # apt installs never ran. If the template lacks lvm2/growpart, the LVM
     # expand failed too — detect here (repair = preinstall in template, or
     # apt install + cloud-init clean + reboot this VM).
-    _missing="$(ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 "ubuntu@${_ip}" "for t in lvextend growpart mkfs.xfs mkfs.ext4 pvcreate vgextend; do command -v \$t >/dev/null || echo \$t; done" 2>/dev/null || true)"
+    _missing="$("${_SSH_ARR[@]}" "ubuntu@${_ip}" "for t in lvextend growpart mkfs.xfs mkfs.ext4 pvcreate vgextend; do command -v \$t >/dev/null || echo \$t; done" 2>/dev/null || true)"
     if [ -n "$_missing" ]; then
       warn "guest tools missing on ${VM_NAME}: ${_missing} (first boot was offline)"
       echo "  Fix template (one-time): boot it WITH lan, apt install lvm2 cloud-guest-utils, reseal to template."
