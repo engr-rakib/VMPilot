@@ -153,11 +153,11 @@ runcmd:
   - netplan apply
   # Guest pipeline marker (YAML-safe printf form — no ": " in source; output
   # keeps the ":: STEP " contract; fetched post-LAN into the deploy log).
-  - printf '%s STEP %s done ts=%s\n' "::" "provision:network" "$(date +%s)"
+  - printf '%s STEP %s done %s ts=%s\n' "::" "provision:network" "$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[0-9./]+' | head -1)" "$(date +%s)"
   # Pick up the kbdinteractive drop-in (password-change dialogue for
   # expired-password users). Safe: no SSH sessions exist during provisioning.
   - systemctl reload ssh 2>/dev/null || systemctl restart ssh 2>/dev/null || true
-  - printf '%s STEP %s done ts=%s\n' "::" "provision:ssh" "$(date +%s)"
+  - printf '%s STEP %s done %s ts=%s\n' "::" "provision:ssh" "$(systemctl is-active ssh 2>/dev/null || echo unknown)" "$(date +%s)"
 %{ if length(os_partitions) > 0 }
   - |
     echo ":: STEP provision:disk-allocate start ts=$(date +%s)"
@@ -287,7 +287,7 @@ runcmd:
     for _t in lvextend growpart mkfs.xfs mkfs.ext4 pvcreate vgextend vgcreate lvcreate; do
       command -v "$_t" >/dev/null 2>&1 || _miss="$_miss $_t"
     done
-    if [ -z "$_miss" ]; then echo ":: STEP provision:deps done ts=$(date +%s)"; else echo ":: STEP provision:deps fail missing:$_miss ts=$(date +%s)"; fi
+    if [ -z "$_miss" ]; then echo ":: STEP provision:deps done 8-tools-present ts=$(date +%s)"; else echo ":: STEP provision:deps fail missing:$_miss ts=$(date +%s)"; fi
   # Root-access checkpoint (ubuntu passwordless sudo for deploy operator).
   - |
     if sudo -n -U ubuntu true 2>/dev/null || sudo -l -U ubuntu 2>/dev/null | grep -q "NOPASSWD"; then echo ":: STEP provision:root-access done ubuntu ts=$(date +%s)"; else echo ":: STEP provision:root-access fail ubuntu ts=$(date +%s)"; fi
