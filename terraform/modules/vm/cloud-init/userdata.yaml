@@ -198,6 +198,11 @@ runcmd:
 %{ endif }
 %{ endif }
     echo ":: STEP provision:lvm-partition done ${part.lv_name} ts=$(date +%s)"
+    # Re-point stdout/stderr at the CURRENT visible log: mounting a fresh LV
+    # over /var leaves this shell's fd pointing at the shadowed (hidden) file,
+    # so every later marker would vanish from the visible log. Unconditional =
+    # harmless when nothing was shadowed. (Proven 2026-10-13: log froze mid-mkfs.)
+    exec >> /var/log/cloud-init-output.log 2>&1
 %{ endfor ~}
 %{ endif }
 %{ if length(os_partitions) > 0 }
@@ -307,33 +312,6 @@ runcmd:
   # only, then poweroff for LAN-up. Never executed here.
   - echo "hardening policy delivered = $(wc -l < /etc/vmpilot/hardening.sh 2>/dev/null || echo 0) lines (runs post-LAN via deploy)"
   - printf '%s STEP %s done lines=%s ts=%s\n' "::" "provision:policy-delivered" "$(wc -l < /etc/vmpilot/hardening.sh 2>/dev/null || echo 0)" "$(date +%s)"
-  # Catch-up summary: mounting new LVs over /var HIDES the earlier part of
-  # cloud-init-output.log (open fd keeps writing the shadowed file). Re-emit
-  # dones here so the VISIBLE log always holds the full phase list. Each line
-  # mirrors its phase's own terraform conditional — never claim an unrun phase.
-  - |
-    echo ":: STEP provision:network done ts=$(date +%s)"
-    echo ":: STEP provision:ssh done ts=$(date +%s)"
-%{ if length(os_partitions) > 0 }
-    echo ":: STEP provision:disk-allocate done ts=$(date +%s)"
-%{ endif }
-%{ if ! os_has_swap }
-    echo ":: STEP provision:swap done ts=$(date +%s)"
-%{ endif }
-%{ if length(lvm_config) > 0 }
-    echo ":: STEP provision:lvm-data done ts=$(date +%s)"
-    echo ":: STEP provision:lvm-mount done ts=$(date +%s)"
-%{ endif }
-%{ if length(mount_points) > 0 }
-    echo ":: STEP provision:mounts done ts=$(date +%s)"
-%{ endif }
-    echo ":: STEP provision:deps done ts=$(date +%s)"
-    echo ":: STEP provision:users done ts=$(date +%s)"
-    echo ":: STEP provision:root-access done ts=$(date +%s)"
-%{ if enable_node_exporter }
-    echo ":: STEP provision:node-exporter done ts=$(date +%s)"
-%{ endif }
-    echo ":: STEP provision:policy-delivered done ts=$(date +%s)"
   # Offline first boot (lan-up-last): no global IPv4 means the LAN cable is
   # disconnected. Every local provisioning step above is complete — power off
   # so deploy connects the LAN onto a fully-provisioned guest (no network
