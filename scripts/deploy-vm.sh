@@ -580,6 +580,7 @@ lan_up() {
         if [ "$_denied" -ge 5 ]; then
           info "LAN: SSH key rejected 5x in a row — key/user wrong, waiting won't help"
           pstep deploy-vm ssh-gate fail "key-denied"
+          _gate_failed=1
           break
         fi
       fi
@@ -590,7 +591,7 @@ lan_up() {
       fi
     done
     info "LAN: SSH gate took $(( $(date +%s) - _t0 ))s over $((_i+1)) attempt(s)${_last_err:+; last error: ${_last_err}}"
-    if [ "$_i" -ge 90 ]; then pstep deploy-vm ssh-gate fail "timeout-1800s"; elif [ "$_denied" -ge 5 ]; then :; else pstep deploy-vm ssh-gate done "$((_i+1))-attempts"; fi
+    if [ "$_i" -ge 90 ]; then pstep deploy-vm ssh-gate fail "timeout-1800s"; _gate_failed=1; elif [ "$_denied" -ge 5 ]; then :; else pstep deploy-vm ssh-gate done "$((_i+1))-attempts"; fi
   fi
   # Phase 4 (best-effort): confirm cloud-init finished over SSH. Needs the
   # operator's key for ubuntu@IP (agent or ~/.ssh default) — failure here is
@@ -602,10 +603,17 @@ lan_up() {
   if [ -n "$_ip" ]; then
     _SSH="ssh -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 ubuntu@${_ip}"
     _boot1="$($_SSH "cat /proc/sys/kernel/random/boot_id" 2>/dev/null || true)"
-    _ci=""; _j=0; _t1=$(date +%s)
+    _ci=""; _j=0; _t1=$(date +%s); _gate_failed="${_gate_failed:-0}"
     pstep deploy-vm cloud-init start
     while [ "$_j" -lt 60 ]; do
       _ci="$($_SSH "cloud-init status 2>/dev/null" 2>/dev/null || true)"
+      # Self-heal: if the SSH gate failed earlier (transient net/ARP class)
+      # but SSH answers now, close the gate as recovered so the pipeline
+      # stage reflects reality instead of a stale failure.
+      if [ -n "$_ci" ] && [ "${_gate_failed:-0}" = "1" ]; then
+        pstep deploy-vm ssh-gate done "recovered-late"
+        _gate_failed=0
+      fi
       case "$_ci" in
         *done*) break;;
         *error*) break;;
