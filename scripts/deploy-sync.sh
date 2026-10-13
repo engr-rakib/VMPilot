@@ -182,6 +182,22 @@ for host in "${!CFG_KEY[@]}"; do
       pstep deploy-sync vm-deploy start "${host}"
   fi
 
+  # Completeness gate (all modes incl. list-preview): a skeleton config
+  # (empty ip/cluster/template/datastore/network) can never deploy — skip
+  # with a clear marker instead of burning minutes in terraform.
+  _incomplete=""
+  for _k in ip_address cluster template datastore network; do
+    if ! grep -qE "^[[:space:]]*${_k}[[:space:]]*=[[:space:]]*\"[^\"]+\"" "$file" 2>/dev/null; then
+      _incomplete="${_incomplete} ${_k}"
+    fi
+  done
+  if [ -n "$_incomplete" ]; then
+    warn "R0 skip: ${host} (incomplete config, missing:${_incomplete} — finish it first, no deploy attempted)"
+    pstep deploy-sync vm-incomplete skip "${host}"
+    SKIPPED=$((SKIPPED + 1))
+    continue
+  fi
+
   CHANGED=$((CHANGED + 1))
 
   if [ "$MODE" = "list" ]; then
