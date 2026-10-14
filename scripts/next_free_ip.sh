@@ -122,6 +122,10 @@ RESERVED_FILE_IPS="$(printf '%s' "$RESERVED_FILE_IPS" | sort -u)"
 
 IFS='.' read -r o1 o2 o3 o4 <<< "$BASE_IP"
 
+# Candidate list first (fast local checks), then ping ALL of them in PARALLEL
+# and take the lowest non-responder — 20 sequential pings (~20s worst case)
+# become one ~1s wave. Order preserved: lowest free IP still wins.
+_CANDS=""
 for i in $(seq 0 "$MAX_ATTEMPTS"); do
   # No cross-octet carry — .255 is the last handout in this /24; going past
   # it would emit .256 (invalid) or leak into the next subnet. Stop loudly.
@@ -155,14 +159,24 @@ for i in $(seq 0 "$MAX_ATTEMPTS"); do
   if echo "$RESERVED_FILE_IPS" | grep -qx "$candidate"; then
     continue
   fi
-  if ! ping -c1 -W1 "$candidate" &>/dev/null; then
+  _CANDS="${_CANDS} ${candidate}"
+done
+_PINGDIR="$(mktemp -d /tmp/vmpilot-ipam-XXXXXX)"
+for _c in $_CANDS; do
+  ( ping -c1 -W2 "$_c" >/dev/null 2>&1 && echo "USED $_c" || echo "FREE $_c" ) > "$_PINGDIR/$RANDOM-$$" 2>/dev/null &
+done
+wait
+for _c in $_CANDS; do
+  if grep -qxF "FREE $_c" "$_PINGDIR"/* 2>/dev/null; then
+    rm -rf "$_PINGDIR"
     # STEP marker goes to STDERR: stdout is the JSON contract (terraform
     # external data source parses it) — stderr is safe for humans + job logs.
-    echo ":: STEP ipam:scan done ${candidate} ts=$(date +%s)" >&2
-    echo "{\"free_ip\": \"$candidate\", \"attempted\": \"$i\"}"
+    echo ":: STEP ipam:scan done ${_c} ts=$(date +%s)" >&2
+    echo "{\"free_ip\": \"$_c\", \"attempted\": \"0\"}"
     exit 0
   fi
 done
+rm -rf "$_PINGDIR"
 
 echo ":: STEP ipam:scan fail \"none-free\" ts=$(date +%s)" >&2
 echo "{\"error\": \"No free IP found after $MAX_ATTEMPTS attempts from $BASE_IP\"}"

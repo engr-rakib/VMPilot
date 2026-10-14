@@ -679,15 +679,15 @@ lan_up() {
       ok "hardening applied on ${VM_NAME} (see /var/log/vmpilot-hardening.log)"
       pstep deploy-vm hardening done
       rm -f "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
-      "${_SSH_ARR[@]}" "ubuntu@${_ip}" "printf '# VMPilot hardening manifest\n# Source: secure/<server>/<vcenter>/hardening.sh (+ <env>/hardening.sh)\ndate: %s\nscript_exit=0\nlog=/var/log/vmpilot-hardening.log\n' \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee /etc/vmpilot-hardening.md >/dev/null" 2>/dev/null || true
-      # Pipeline checks: surface the guest VERIFY lines in deploy/job output
-      # (WebUI jobs display shows these — per-step PASS/FAIL/SKIP).
+      # ONE batched guest fetch (was 3 SSH handshakes): manifest + CHECKs +
+      # STEP markers + tool inventory. Tracking cost ≈ one round-trip.
       pstep deploy-vm checks start "collecting hardening validation checks"
+      _GUEST_ALL="$("${_SSH_ARR[@]}" "ubuntu@${_ip}" 'printf "# VMPilot hardening manifest\n# Source: secure/<server>/<vcenter>/hardening.sh (+ <env>/hardening.sh)\ndate: %s\nscript_exit=0\nlog=/var/log/vmpilot-hardening.log\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" | sudo tee /etc/vmpilot-hardening.md >/dev/null; echo "@@CHECKS@@"; grep -h "^CHECK " /var/log/vmpilot-hardening.log 2>/dev/null | tail -20; echo "@@STEPS@@"; grep -ah ":: STEP" /var/log/cloud-init-output.log /var/log/vmpilot-hardening.log 2>/dev/null | tail -40; echo "@@TOOLS@@"; for t in lvextend growpart mkfs.xfs mkfs.ext4 pvcreate vgextend; do command -v $t >/dev/null || echo $t; done' 2>/dev/null || true)"
+      _GUEST_CHECKS="$(echo "$_GUEST_ALL" | sed -n '/^@@CHECKS@@$/,/^@@STEPS@@$/p' | grep "^CHECK " || true)"
+      _GUEST_STEPS="$(echo "$_GUEST_ALL" | sed -n '/^@@STEPS@@$/,/^@@TOOLS@@$/p' | grep ":: STEP" || true)"
+      _missing="$(echo "$_GUEST_ALL" | sed -n '/^@@TOOLS@@$/,$p' | grep -v "^@@TOOLS@@$" | tr '\n' ' ' || true)"
       echo "  --- hardening pipeline checks (${VM_NAME}) ---"
-      "${_SSH_ARR[@]}" "ubuntu@${_ip}" "grep -h '^CHECK ' /var/log/vmpilot-hardening.log 2>/dev/null | tail -20" 2>/dev/null | sed 's/^/  /' || true
-      # Guest pipeline steps: provision (cloud-init) + harden markers → deploy
-      # output (parsed by the same :: STEP contract) + per-VM pipeline log.
-      _GUEST_STEPS="$("${_SSH_ARR[@]}" "ubuntu@${_ip}" "grep -ah ':: STEP' /var/log/cloud-init-output.log /var/log/vmpilot-hardening.log 2>/dev/null | tail -40" 2>/dev/null || true)"
+      if [ -n "$_GUEST_CHECKS" ]; then echo "$_GUEST_CHECKS" | sed 's/^/  /'; else echo "  (no CHECK lines yet)"; fi
       if [ -n "$_GUEST_STEPS" ]; then
         echo "  --- guest pipeline steps (${VM_NAME}) ---"
         echo "$_GUEST_STEPS" | sed 's/^/  /'
@@ -710,7 +710,10 @@ lan_up() {
     # apt installs never ran. If the template lacks lvm2/growpart, the LVM
     # expand failed too — detect here (repair = preinstall in template, or
     # apt install + cloud-init clean + reboot this VM).
-    _missing="$("${_SSH_ARR[@]}" "ubuntu@${_ip}" "for t in lvextend growpart mkfs.xfs mkfs.ext4 pvcreate vgextend; do command -v \$t >/dev/null || echo \$t; done" 2>/dev/null || true)"
+    # Reuses the batched fetch above when present (no extra handshake).
+    if [ -z "${_missing:-}" ]; then
+      _missing="$("${_SSH_ARR[@]}" "ubuntu@${_ip}" "for t in lvextend growpart mkfs.xfs mkfs.ext4 pvcreate vgextend; do command -v \$t >/dev/null || echo \$t; done" 2>/dev/null || true)"
+    fi
     if [ -n "$_missing" ]; then
       warn "guest tools missing on ${VM_NAME}: ${_missing} (first boot was offline)"
       echo "  Fix template (one-time): boot it WITH lan, apt install lvm2 cloud-guest-utils, reseal to template."
