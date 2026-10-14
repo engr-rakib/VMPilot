@@ -27,6 +27,7 @@ set -euo pipefail
 # Exit codes: 0 = deployed + LAN + hardening OK · 1 = error · 3 = VM deployed
 # but HARDENING FAILED (marker deploy/<srv>/<vc>/<env>/.hardening-<vm>.failed;
 # retry with --lan-up; deploy-sync R2 never skips marked VMs).
+# 124 = terraform apply timed out (30 min, hung vSphere task).
 #   Example:
 #     ./scripts/deploy-vm.sh dc_pilot_192.0.2.10 dev web-02
 #
@@ -492,6 +493,7 @@ lan_up() {
   # Phase 1: guest fully ready = powered on + Tools running (no network needed
   # for this check — govc talks to the host, not the guest).
   info "LAN: waiting for ${VM_NAME} to be fully ready (power + Tools)…"
+  pstep deploy-vm guest-ready start "waiting for power + VMware Tools"
   local _i=0 _st=""
   while [ "$_i" -lt 120 ]; do
     _st=$(govc vm.info -json "$VM_NAME" 2>/dev/null \
@@ -503,13 +505,14 @@ lan_up() {
   done
   case "$_st" in
     *poweredOn/toolsOk*|*poweredOn/toolsOld*) ok "Guest ready: ${VM_NAME} (${_st})"; pstep deploy-vm guest-ready done "${_st}" ;;
-    *) warn "guest not ready yet (${_st:-unknown}) — connecting LAN anyway (check VM console if IP never appears)" ;;
+    *) warn "guest not ready yet (${_st:-unknown}) — connecting LAN anyway (check VM console if IP never appears)"; pstep deploy-vm guest-ready warn "not-ready-${_st:-unknown}" ;;
   esac
   # Phase 1b: ALL offline OS work complete? An offline first boot ends with
   # a clean poweroff (last runcmd step — power state is the signal, no guest
   # writes needed). Online boots never power off: they get an IP instead.
   # Poll BOTH: poweredOff → connect + power on; IPv4 present → normal flow.
   # (--lan-up skips this gate: the operator explicitly asks for connect NOW.)
+  pstep deploy-vm lan-connect start "checking OS installation and connecting NICs"
   if [ "${LANUP_SKIP_GATE:-false}" != true ]; then
   info "LAN: waiting for OS installation to complete…"
   _i=0 _st="" _ip="" _mode=""
@@ -533,13 +536,19 @@ lan_up() {
   _nics=$(govc device.info -vm "$VM_NAME" -json 2>/dev/null \
     | jq -r '.devices[]? | select(.name // "" | startswith("ethernet-")) | .name' 2>/dev/null || true)
   [ -z "$_nics" ] && _nics=$(govc device.ls -vm "$VM_NAME" 2>/dev/null | grep -oE 'ethernet-[0-9]+' || true)
-  [ -n "$_nics" ] || { warn "no NICs found on ${VM_NAME}"; unset GOVC_PASSWORD; return 1; }
+  if [ -z "$_nics" ]; then
+    warn "no NICs found on ${VM_NAME}"
+    pstep deploy-vm lan-connect fail "no-nic"
+    unset GOVC_PASSWORD
+    return 1
+  fi
   for _n in $_nics; do
     if govc device.connect -vm "$VM_NAME" "$_n" >/dev/null 2>&1; then
       ok "LAN up: ${VM_NAME}/${_n} connected"
       pstep deploy-vm lan-connect done "${_n}"
     else
       info "LAN: ${VM_NAME}/${_n} already connected (nothing to do)"
+      pstep deploy-vm lan-connect done "${_n}-already-connected"
     fi
   done
   # Offline path left the VM powered off → boot it now (fast second boot:
@@ -550,6 +559,7 @@ lan_up() {
       || warn "power-on failed — start it from vCenter console"
   fi
   local _ip="" _i=0
+  pstep deploy-vm guest-ip start "waiting for VMware guest IPv4"
   while [ "$_i" -lt 60 ]; do
     _ip=$(govc vm.ip -v4 "$VM_NAME" 2>/dev/null || true)
     [ -n "$_ip" ] && break
@@ -645,7 +655,7 @@ lan_up() {
         pstep deploy-vm cloud-init done
         fi
         ;;
-      *error*) warn "cloud-init errored on ${VM_NAME}: ${_ci} — check: ssh ubuntu@${_ip} 'cloud-init status --long'";;
+      *error*) warn "cloud-init errored on ${VM_NAME}: ${_ci} — check: ssh ubuntu@${_ip} 'cloud-init status --long'"; pstep deploy-vm cloud-init warn "guest-reported-error" ;;
       *) info "cloud-init status unconfirmed after $(( $(date +%s) - _t1 ))s (SSH key may differ) — check: ssh ubuntu@${_ip} 'cloud-init status'"; pstep deploy-vm cloud-init fail "unconfirmed";
         # Guest session forensics: the VM's own provisioning log tail shows
         # WHERE cloud-init stopped (deleted markers, runcmd errors, slow cp).
@@ -659,6 +669,7 @@ lan_up() {
     # Pre-hardening SSH settle: cloud-init's package stage can reboot the
     # guest even AFTER reporting done — wait for one clean SSH (up to 3 min)
     # before the single 25-min hardening run.
+    pstep deploy-vm hardening start "waiting for stable SSH and guest hardening"
     _h=0
     while [ "$_h" -lt 12 ]; do
       if "${_SSH_ARR[@]}" "ubuntu@${_ip}" "echo H-READY" 2>/dev/null | grep -q "H-READY"; then break; fi
@@ -671,6 +682,7 @@ lan_up() {
       "${_SSH_ARR[@]}" "ubuntu@${_ip}" "printf '# VMPilot hardening manifest\n# Source: secure/<server>/<vcenter>/hardening.sh (+ <env>/hardening.sh)\ndate: %s\nscript_exit=0\nlog=/var/log/vmpilot-hardening.log\n' \"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" | sudo tee /etc/vmpilot-hardening.md >/dev/null" 2>/dev/null || true
       # Pipeline checks: surface the guest VERIFY lines in deploy/job output
       # (WebUI jobs display shows these — per-step PASS/FAIL/SKIP).
+      pstep deploy-vm checks start "collecting hardening validation checks"
       echo "  --- hardening pipeline checks (${VM_NAME}) ---"
       "${_SSH_ARR[@]}" "ubuntu@${_ip}" "grep -h '^CHECK ' /var/log/vmpilot-hardening.log 2>/dev/null | tail -20" 2>/dev/null | sed 's/^/  /' || true
       # Guest pipeline steps: provision (cloud-init) + harden markers → deploy
@@ -692,6 +704,7 @@ lan_up() {
       date -u +%Y-%m-%dT%H:%M:%SZ > "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
       _HARDEN_FAILED=3
       pstep deploy-vm hardening fail "see-log"
+      pstep deploy-vm checks skip "hardening-failed"
     fi
     # Phase 5 (offline-boot safety): first boot without LAN means cloud-init's
     # apt installs never ran. If the template lacks lvm2/growpart, the LVM
@@ -703,6 +716,11 @@ lan_up() {
       echo "  Fix template (one-time): boot it WITH lan, apt install lvm2 cloud-guest-utils, reseal to template."
       echo "  Repair this VM: ssh ubuntu@${_ip} → sudo apt-get install -y lvm2 cloud-guest-utils && sudo cloud-init clean --logs && sudo reboot"
     fi
+  else
+    pstep deploy-vm ssh-gate skip "guest-ip-unavailable"
+    pstep deploy-vm cloud-init skip "guest-ip-unavailable"
+    pstep deploy-vm hardening skip "guest-ip-unavailable"
+    pstep deploy-vm checks skip "guest-ip-unavailable"
   fi
   unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME
   return "${_HARDEN_FAILED:-0}"
@@ -809,16 +827,22 @@ else
   # real fail marker with the first Error line → the UI shows the cause.
   _APPLY_LOG="$(mktemp "/tmp/vmpilot-apply-XXXXXX.log")"
   set +e
-  terraform -chdir="$TF_DIR" apply -auto-approve \
+  # 30-min cap: a hung vSphere task (datastore/array stall) must not hold the
+  # job forever — timeout kills it, rc=124 maps to a clear marker below.
+  timeout 1800 terraform -chdir="$TF_DIR" apply -auto-approve \
     -state="${STATE_FILE}" \
     -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}" 2>&1 | tee "${_APPLY_LOG}"
   _TF_RC=${PIPESTATUS[0]}
   set -e
   if [ "${_TF_RC}" -ne 0 ]; then
-    _APPLY_ERR="$( { grep -m1 -A2 '^Error:' "${_APPLY_LOG}" 2>/dev/null || true; } | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
-    [ -n "$_APPLY_ERR" ] || _APPLY_ERR="$( { grep -m1 -iE 'MonitorLoop|power on|reservation|insufficient' "${_APPLY_LOG}" 2>/dev/null || true; } | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
-    [ -n "$_APPLY_ERR" ] || _APPLY_ERR="$(tail -3 "${_APPLY_LOG}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
-    [ -n "$_APPLY_ERR" ] || _APPLY_ERR="terraform exited ${_TF_RC}"
+    if [ "${_TF_RC}" = "124" ]; then
+      _APPLY_ERR="terraform apply timed out after 30 min (hung vSphere task?) — check vCenter recent tasks, then retry or kill"
+    else
+      _APPLY_ERR="$( { grep -m1 -A2 '^Error:' "${_APPLY_LOG}" 2>/dev/null || true; } | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
+      [ -n "$_APPLY_ERR" ] || _APPLY_ERR="$( { grep -m1 -iE 'MonitorLoop|power on|reservation|insufficient' "${_APPLY_LOG}" 2>/dev/null || true; } | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
+      [ -n "$_APPLY_ERR" ] || _APPLY_ERR="$(tail -3 "${_APPLY_LOG}" 2>/dev/null | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g' | cut -c1-200 || true)"
+      [ -n "$_APPLY_ERR" ] || _APPLY_ERR="terraform exited ${_TF_RC}"
+    fi
     # stdout (not stderr) so the executor's log capture always flushes it.
     echo "terraform apply failed (rc=${_TF_RC}): ${_APPLY_ERR}"
     pstep deploy-vm apply fail "${_APPLY_ERR}"
