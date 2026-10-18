@@ -24,14 +24,16 @@
 # Usage:  bash scripts/git-maintenance.sh [--keep N] [--apply] [--push]
 #         default is a dry run that only reports.
 #
-# Env:    KEEP_COMMITS=10   LFS_STORE=/opt/terraform-lab/git-lfs-store
+# Env:    KEEP_COMMITS=5 (default)  LFS_STORE=/opt/terraform-lab/git-lfs-store
+#         Why 5 and not 10: every kept commit carries a ~300 MB gz/LFS pointer of
+#         the webui DB, so 10 commits pin ~3 GB. 5 keeps a week of snapshots.
 
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-KEEP="${KEEP_COMMITS:-10}"
+KEEP="${KEEP_COMMITS:-5}"
 APPLY=0
 PUSH=0
 BRANCH="private-backup"

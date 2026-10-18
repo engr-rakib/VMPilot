@@ -197,7 +197,7 @@ do_backup() {
   # and print the numbers, so a growth trend shows up in the cron mail instead
   # of being discovered at 100 %.
   if [ -f "${PROJECT_DIR}/scripts/git-maintenance.sh" ]; then
-    KEEP_COMMITS="${KEEP_COMMITS:-10}" bash "${PROJECT_DIR}/scripts/git-maintenance.sh" --apply --keep "${KEEP_COMMITS:-10}" 2>&1 | sed 's/^/  /' || warn "git maintenance failed (repo may keep growing)"
+    KEEP_COMMITS="${KEEP_COMMITS:-5}" bash "${PROJECT_DIR}/scripts/git-maintenance.sh" --apply --keep "${KEEP_COMMITS:-5}" 2>&1 | sed 's/^/  /' || warn "git maintenance failed (repo may keep growing)"
   fi
   local used_pct=$(df -h "$PROJECT_DIR" | tail -1 | awk '{gsub("%","",$5); print $5}')
   if [ "${used_pct:-0}" -ge 85 ]; then
