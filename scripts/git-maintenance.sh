@@ -53,6 +53,36 @@ warn() { printf '  WARN: %s\n' "$*" >&2; }
 
 echo "== git maintenance (branch=$BRANCH keep=$KEEP apply=$APPLY) =="
 
+# Publish the local chain and PROVE the remote took it. A trimmed chain that only
+# exists locally is a backup that does not exist — so --push must also repair a
+# plain drift (local tip != remote tip) when no trim was needed, and it must never
+# swallow the reason (`>/dev/null 2>&1` turned a rejected DR push into one useless
+# WARN line).
+publish_trim() {
+  local _local _rtip _plog
+  _local=$(git rev-parse "$BRANCH")
+  _rtip=$(git ls-remote private "refs/heads/$BRANCH" 2>/dev/null | cut -f1)
+  if [ "$_rtip" = "$_local" ]; then
+    say "private/$BRANCH already == local tip (nothing to publish)"
+    return 0
+  fi
+  say "publishing $BRANCH to private (local ${_local:0:10}, remote ${_rtip:-unreachable}) …"
+  _plog="$(mktemp /tmp/vmpilot-maint-push-XXXXXX.log)"
+  if git push --force --atomic private "$BRANCH:refs/heads/$BRANCH" "$BRANCH:refs/heads/main" >"$_plog" 2>&1; then
+    say "pushed (refs/heads/$BRANCH and refs/heads/main)"
+  else
+    warn "push FAILED — this chain is LOCAL ONLY:"
+    tail -n 8 "$_plog" | sed 's/^/      /' >&2
+  fi
+  rm -f "$_plog"
+  _rtip=$(git ls-remote private "refs/heads/$BRANCH" 2>/dev/null | cut -f1)
+  if [ "$_rtip" = "$_local" ]; then
+    say "verified: private/$BRANCH == local tip"
+  else
+    warn "verify FAILED: private/$BRANCH is ${_rtip:-unreachable}, local is $_local"
+  fi
+}
+
 TOTAL=$(git rev-list --count "$BRANCH")
 say "commits on $BRANCH: $TOTAL"
 
@@ -82,16 +112,11 @@ if [ "$TOTAL" -gt "$KEEP" ]; then
     fi
     git update-ref "refs/heads/$BRANCH" "$PARENT" "$OLD_TIP"
     say "trimmed $TOTAL -> $(git rev-list --count "$BRANCH") (tree identical, worktree untouched)"
-    if [ "$PUSH" -eq 1 ]; then
-      say "pushing trimmed branch to private …"
-      git push private "$BRANCH:refs/heads/$BRANCH" --force >/dev/null 2>&1 \
-        && git push private "$BRANCH:refs/heads/main" --force >/dev/null 2>&1 \
-        && say "pushed (both refs/heads/$BRANCH and refs/heads/main)" \
-        || warn "push failed — run again, or check credentials"
-    fi
+    publish_trim
   fi
 else
   say "history already within the cap"
+  [ "$PUSH" -eq 1 ] && publish_trim
 fi
 
 # ── 2. drop unreachable objects + prune LFS ────────────────────────────────
