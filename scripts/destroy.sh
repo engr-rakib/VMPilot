@@ -28,8 +28,12 @@ set -euo pipefail
 #   ./scripts/destroy.sh <vcenter> <env> <vm-name>            # interactive
 #   ./scripts/destroy.sh <vcenter> <env> <vm-name> --yes      # non-interactive
 #   ./scripts/destroy.sh <vcenter> <env> <vm-name> --plan     # dry-run preview
-#   ./scripts/destroy.sh <vcenter> <env> <vm-name> --keep-config  # keep tfvars
+#   ./scripts/destroy.sh <vcenter> <env> <vm-name> --delete-config  # ALSO delete tfvars
 #   ./scripts/destroy.sh <vcenter> <env> <vm-name> --no-clean      # keep creds
+#
+#   DEFAULT: only the VM is removed (vCenter + terraform state). The per-VM
+#   config file is KEPT so the same VM can be redeployed from it; pass
+#   --delete-config (or tick the box in the WebUI) to delete it too.
 #
 #   Example:
 #     ./scripts/destroy.sh dc_pilot_192.0.2.10 dev web-02 --yes
@@ -45,11 +49,11 @@ ENV="${2:-}"
 VM_NAME="${3:-}"
 MODE="apply"
 ASSUME_YES=false
-KEEP_CONFIG=false
+KEEP_CONFIG=true   # DEFAULT: keep the tfvars so the VM can be redeployed
 KEEP_CREDS=false
 
 if [ -z "$VCENTER" ] || [ -z "$ENV" ] || [ -z "$VM_NAME" ]; then
-  echo "Usage: $0 <vcenter> <env> <vm-name> [--plan|--yes|--keep-config|--no-clean]"
+  echo "Usage: $0 <vcenter> <env> <vm-name> [--plan|--yes|--delete-config|--no-clean]"
   echo "  $0 dc_pilot_192.0.2.10 dev web-02 --yes"
   exit 1
 fi
@@ -58,7 +62,7 @@ for arg in "$@"; do
   case "$arg" in
     --plan)          MODE="plan" ;;
     --yes)           ASSUME_YES=true ;;
-    --keep-config)   KEEP_CONFIG=true ;;
+    --delete-config) KEEP_CONFIG=false ;;
     --no-clean)      KEEP_CREDS=true ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
@@ -70,9 +74,12 @@ vdir_for() {
   local _r="${ROOT_DIR:-.}"; if [ -d "${_r}/$1/${2##*_}/$2" ]; then echo "$1/${2##*_}/$2"; else echo "$1/$2"; fi
 }
 ENV_DIR="${ROOT_DIR}/$(vdir_for deploy "$VCENTER")/${ENV}"
-# Per-VM pipeline log (same file deploy-vm.sh appends to — full history).
-# Header is written after the existence check below (no litter for ghosts).
-PIPELINE_LOG="${ENV_DIR}/.pipeline-${VM_NAME}.log"
+# Runtime per-env state (markers — under .cache/state, not tfvars).
+state_dir_for "$VCENTER" "$ENV" "$ENV_DIR"
+# Per-VM pipeline log (same file deploy-vm.sh appends to — full history,
+# under .cache/pipelines). Header is written after the existence check below
+# (no litter for ghosts).
+pipeline_log_for "$VCENTER" "$ENV" "$VM_NAME" "$ENV_DIR"
 STATE_FILE="${TF_DIR}/terraform.${VCENTER}.${ENV}.tfstate"
 CONFIG_FILE=""
 for f in "${ENV_DIR}"/vm-${VM_NAME}_*.tfvars; do
@@ -89,6 +96,8 @@ if [ -z "$TRACKED" ] && [ -z "$CONFIG_FILE" ]; then
   die "VM '${VM_NAME}' is not in state and has no config file — nothing to destroy."
 fi
 pipeline_log_header "destroy $VCENTER $ENV $VM_NAME"
+# Full run output into the shared log (WebUI imports this slice for CLI runs).
+pipeline_tee_on
 
 echo ""
 echo "=========================================================="
@@ -112,7 +121,12 @@ if [ "$MODE" = "plan" ]; then
   [ -n "$TRACKED" ] && { echo "  1. Backup state file"; echo "  2. Remove ${VM_RESOURCE#module.vm[\"]} from Terraform state"; }
   echo "  3. govc vm.destroy \"${VM_NAME}\" in vCenter"
   [ -n "$CONFIG_FILE" ] && [ "$KEEP_CONFIG" = false ] && echo "  4. Delete config file: ${CONFIG_FILE#${ROOT_DIR}/}"
+  [ -n "$CONFIG_FILE" ] && [ "$KEEP_CONFIG" = true ] && echo "  4. Keep config file: ${CONFIG_FILE#${ROOT_DIR}/} (default — redeploy from it)"
+  echo "  5. Clear stale hardening marker: .cache/state/.hardening-${VM_NAME}.failed"
   echo ""
+  for _phase in state-backup resolve vcenter-destroy state-rm config-delete markers-clean; do
+    pstep destroy "$_phase" skip "plan-mode"
+  done
   pstep destroy pipeline skip "plan-mode"
   exit 0
 fi
@@ -123,12 +137,19 @@ if [ "$ASSUME_YES" = false ]; then
   read -rp "$(echo -e "${YELLOW}Type DESTROY to confirm: ${NC}")" ack
   if [ "$ack" != "DESTROY" ]; then
     info "Cancelled."
+    for _phase in state-backup resolve vcenter-destroy state-rm config-delete markers-clean; do
+      pstep destroy "$_phase" skip "cancelled"
+    done
     pstep destroy pipeline skip "cancelled"
     exit 0
   fi
-  [ -n "$CONFIG_FILE" ] && [ "$KEEP_CONFIG" = false ] && \
-    read -rp "$(echo -e "${YELLOW}Also delete the config file? ${NC}(y/N): ")" delcfg && \
-    [[ "$delcfg" =~ ^[Yy] ]] || KEEP_CONFIG=true
+  if [ -n "$CONFIG_FILE" ]; then
+    # Default answer is NO: the config file survives so the same VM can be
+    # redeployed from it. Type y to delete it as part of the destroy.
+    if read -rp "$(echo -e "${YELLOW}Also delete the config file ${CONFIG_FILE##*/}? ${NC}(y/N): ")"; then
+      if [[ "${delcfg:-}" =~ ^[Yy] ]]; then KEEP_CONFIG=false; fi
+    fi
+  fi
 fi
 
 # ─── Step 0: backup the state file ────────────────────────────────────────
@@ -150,7 +171,14 @@ fi
 # backup) still describe reality — no orphaned live VM. Never delete
 # state-adjacent files while the VM may still exist.
 DECRYPT_SCRIPT="${SCRIPT_DIR}/sops-decrypt.sh"
-[ -f "$DECRYPT_SCRIPT" ] || { error "Missing: ${DECRYPT_SCRIPT}"; exit 1; }
+if [ ! -f "$DECRYPT_SCRIPT" ]; then
+  error "Missing: ${DECRYPT_SCRIPT}"
+  for _phase in resolve vcenter-destroy state-rm config-delete markers-clean; do
+    pstep destroy "$_phase" skip "decrypt-script-missing"
+  done
+  pstep destroy pipeline fail "decrypt-script-missing"
+  exit 1
+fi
 
 cleanup() {
   if [ "$KEEP_CREDS" = false ]; then
@@ -159,7 +187,16 @@ cleanup() {
 }
 trap 'cleanup' EXIT
 
-bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" >/dev/null
+if ! bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" >/dev/null; then
+  error "Credential decryption failed — state + config KEPT."
+  pstep destroy resolve skip "credential-decryption-failed"
+  pstep destroy vcenter-destroy skip "credential-decryption-failed"
+  pstep destroy state-rm skip "credential-decryption-failed"
+  pstep destroy config-delete skip "credential-decryption-failed"
+  pstep destroy markers-clean skip "credential-decryption-failed"
+  pstep destroy pipeline fail "credential-decryption-failed"
+  exit 1
+fi
 
 CRED_FILE="${TF_DIR}/credentials.auto.tfvars"
 if [ -f "$CRED_FILE" ]; then
@@ -181,10 +218,12 @@ if [ -n "${GOVC_URL:-}" ] && [ -n "${GOVC_USERNAME:-}" ] && [ -n "${GOVC_PASSWOR
   fi
   # Resolve the bare name to ONE inventory path — never act on an ambiguous
   # name (same-name VM in another folder/DC). 0 or 2+ matches = abort.
+  pstep destroy resolve start "locating unique vCenter VM"
   _MATCHES="$(govc find / -type m -name "${VM_NAME}" 2>/dev/null || true)"
   _N="$(echo "$_MATCHES" | grep -c . || true)"
   if [ "$_N" -gt 1 ]; then
     error "Refusing destroy: name '${VM_NAME}' matches ${_N} VMs vCenter-wide (need 0 or 1). Matches:$(echo "$_MATCHES" | sed 's/^/\n  /')"
+    pstep destroy resolve fail "ambiguous-name"
     pstep destroy vcenter-destroy fail "ambiguous-name"
     unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME GOVC_DATACENTER
     exit 1
@@ -193,13 +232,14 @@ if [ -n "${GOVC_URL:-}" ] && [ -n "${GOVC_USERNAME:-}" ] && [ -n "${GOVC_PASSWOR
     # Already gone from vCenter (stale state or never deployed): nothing to
     # destroy — continue to state-rm + config handling below.
     warn "VM '${VM_NAME}' not found in vCenter — treating as already gone."
+    pstep destroy resolve done "already-gone"
     pstep destroy vcenter-destroy skip "already-gone"
     unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME GOVC_DATACENTER
   else
   _VMPATH="$(echo "$_MATCHES" | head -n1)"
+  pstep destroy resolve done "${_VMPATH##*/vm/}"
   info "Target (fingerprint):"
   govc vm.info -e "$_VMPATH" 2>/dev/null | grep -E "(Name|Power state|IP address|Host|Memory|CPU):" | sed 's/^/    /' || true
-  pstep destroy resolve done "${_VMPATH##*/vm/}"
   if govc vm.destroy "$_VMPATH" 2>/dev/null; then
     ok "VM destroyed: ${VM_NAME}"
   else
@@ -220,7 +260,11 @@ else
   # No credentials = cannot verify anything: ABORT before touching state or
   # config (previously the script deleted the config while the VM still ran).
   error "Cannot destroy without credentials — state + config KEPT. Decrypt creds and re-run."
+  pstep destroy resolve skip "no-creds"
   pstep destroy vcenter-destroy skip "no-creds"
+  pstep destroy state-rm skip "no-creds"
+  pstep destroy config-delete skip "no-creds"
+  pstep destroy markers-clean skip "no-creds"
   pstep destroy pipeline fail "no-creds-abort"
   exit 1
 fi
@@ -228,31 +272,44 @@ fi
 # ─── Step 2: remove from Terraform state (VM is verifiably gone) ───────────
 if [ -n "$TRACKED" ]; then
   ok "Removing from Terraform state: module.vm[\"${VM_NAME}\"]"
+  pstep destroy state-rm start
   terraform -chdir="$TF_DIR" state rm -state="${STATE_FILE}" \
     "${VM_RESOURCE}" ${IPAM_RESOURCE} >/dev/null 2>&1 || \
     terraform -chdir="$TF_DIR" state rm -state="${STATE_FILE}" "${VM_RESOURCE}" >/dev/null
   ok "Removed from state."
   pstep destroy state-rm done
+else
+  pstep destroy state-rm skip "not-in-state"
 fi
 
 # ─── Step 3: remove the per-VM config file (unless kept) ──────────────────
 if [ -n "$CONFIG_FILE" ] && [ "$KEEP_CONFIG" = false ]; then
+  pstep destroy config-delete start
   rm -f "$CONFIG_FILE"
   ok "Config file removed: ${CONFIG_FILE#${ROOT_DIR}/}"
   pstep destroy config-delete done
 elif [ -n "$CONFIG_FILE" ]; then
-  warn "Config kept: ${CONFIG_FILE#${ROOT_DIR}/} — deploy-sync will redeploy it (R1)."
+  ok "Config kept: ${CONFIG_FILE#${ROOT_DIR}/} — redeploy this VM straight from it."
   pstep destroy config-delete skip "kept"
-  pstep destroy config-delete skip "kept"
+else
+  pstep destroy config-delete skip "no-config"
 fi
 
-# ─── Step 3b: remove this VM's dependent marker files ─────────────────────
-# Per-VM only (.last-ip-<vm> = IP memory for sync R3, .hardening-<vm>.failed
-# = unhardened marker that would flag the NEXT deploy, .pipeline-<vm>.log =
-# history of a VM that no longer exists). Other VMs' files are never touched;
-# `rm -f` makes it a no-op when a marker is already absent.
+# ─── Step 3b: dependent marker files ─────────────────────────────────────
+# Config KEPT (default): only the stale hardening-failure marker goes — it would
+# flag the next deploy of a VM that no longer exists. `.last-ip-<vm>` (IP memory)
+# and pipeline history survive on purpose so the VM can be
+# redeployed from the kept config (both under .cache/, not tfvars).
+# Config DELETED (--delete-config): everything per-VM goes with it.
+# Other VMs' files are never touched; `rm -f` no-ops when already absent.
 _dep_removed=0
-for _dep in "${ENV_DIR}/.last-ip-${VM_NAME}" "${ENV_DIR}/.hardening-${VM_NAME}.failed" "${PIPELINE_LOG}"; do
+pstep destroy markers-clean start
+if [ "$KEEP_CONFIG" = false ]; then
+  _dep_list="${STATE_DIR}/.last-ip-${VM_NAME} ${ENV_DIR}/.last-ip-${VM_NAME} ${STATE_DIR}/.hardening-${VM_NAME}.failed ${ENV_DIR}/.hardening-${VM_NAME}.failed ${PIPELINE_LOG}"
+else
+  _dep_list="${STATE_DIR}/.hardening-${VM_NAME}.failed ${ENV_DIR}/.hardening-${VM_NAME}.failed"
+fi
+for _dep in $_dep_list; do
   if [ -f "$_dep" ]; then
     rm -f "$_dep"
     ok "Marker removed: ${_dep#${ROOT_DIR}/}"

@@ -303,6 +303,11 @@ webui_deploy() {
 
   # hardened edge: TLS + rate limiting via the nginx profile (matches the
   # https:// URL below and docker-compose's optional web service).
+  # Report host Docker versions INTO the webui (Setup status page reads them
+  # from the server container, which is isolated and cannot see host binaries).
+  export HOST_DOCKER_VERSION="$(docker --version 2>/dev/null | head -1)"
+  export HOST_COMPOSE_VERSION="$(docker compose version 2>/dev/null | head -1)"
+  export HOST_PYTHON_VERSION="$(python3 --version 2>&1 | head -1)"
   SUDO=""; [ "$(id -u)" -ne 0 ] && ! docker info >/dev/null 2>&1 && SUDO=sudo
   $SUDO docker compose --profile nginx -f vmpilot-webui/docker-compose.yml up -d --build
 

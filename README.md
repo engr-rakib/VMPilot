@@ -147,9 +147,9 @@ Five layers, one config file. You only ever touch **L1** — everything below is
 │ sops-encrypt.sh · sops-decrypt.sh · next_free_ip.sh                │
 ├────────────────────────────────────────────────────────────────────┤
 │ L2  CONFIG - source of truth                                       │
-│ deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars   per-VM config       │
-│ secure/<vcenter>/vcenter.tfvars               plaintext inventory  │
-│ secure/<vcenter>/credentials.tfvars           SOPS + Age (secret)  │
+│ deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars   per-VM config       │
+│ secure/<server>/<vcenter>/vcenter.tfvars               plaintext inventory  │
+│ secure/<server>/credentials.tfvars           SOPS + Age (secret)  │
 ├────────────────────────────────────────────────────────────────────┤
 │ L3  ORCHESTRATION - Terraform >= 1.6                               │
 │ main.tf for_each · module.vm · IPAM (external data source)         │
@@ -460,7 +460,7 @@ datastores = ["datastore99"]   # ← prod only; dev/staging inherit the top-leve
   `network_subnets`, `network_hosts`
 - **Credentials are never per-env** — secrets live only in `secure/<dir>/credentials.tfvars`
 
-> 📖 **Deep dive:** [docs/vcenter_env_features/README.md](docs/vcenter_env_features/README.md) — full
+> 📖 **Deep dive:** [docs/platfrom_and_env_features/README.md](docs/platfrom_and_env_features/README.md) — full
 > multi-vCenter architecture, onboarding wizard, override model, config layering,
 > policy re-sync, and IPAM/network design.
 
@@ -546,9 +546,9 @@ bash scripts/deploy-vm.sh <vcenter> <env> <vm-name>
 - Your **age key is generated automatically** and encryption works out of the box
   (SOPS creation rules are *path-based*; the wizard encrypts with *your* key —
   no `.sops.yaml` edits required)
-- `vcenter-setup.sh` creates everything: encrypted `secure/<vcenter>/credentials.tfvars`,
+- `vcenter-setup.sh` creates everything: encrypted `secure/<server>/credentials.tfvars`,
   inventory `vcenter.tfvars`, per-env overrides, and the mirrored
-  `deploy/<vcenter>/{dev,prod,staging}/` directories
+  `deploy/<server>/<vcenter>/{dev,prod,staging}/` directories
 - Every deploy auto-decrypts *your* vCenter's credentials, merges per-env
   overrides, and targets only the VM you asked for
 

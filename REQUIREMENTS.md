@@ -25,7 +25,7 @@
 ## 1. What This Project Does
 
 An operator deploys a new VM by dropping a **new per-VM config file** into
-`deploy/<vcenter>/<env>/`. The system reads the config's `hostname` and `ip_address`:
+`deploy/<server>/<vcenter>/<env>/`. The system reads the config's `hostname` and `ip_address`:
 
 - If that hostname + IP is **already deployed** → **do nothing** (no redeploy, no destroy).
 - If it's a **new hostname** → deploy it, and if the configured IP is **already in use** →
@@ -207,7 +207,7 @@ Before the first deploy, confirm all of these:
 These are the **behavioral contracts** every deploy must satisfy.
 
 ### R1 — Auto-deploy on new config
-When a **new** per-VM config file (`deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars`)
+When a **new** per-VM config file (`deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars`)
 appears whose hostname is **not** already tracked in the Terraform state, the system
 must automatically deploy that VM. The operator must not be required to run a per-VM
 command or edit the for_each key manually.

@@ -312,15 +312,31 @@ runcmd:
   # only, then poweroff for LAN-up. Never executed here.
   - echo "hardening policy delivered = $(wc -l < /etc/vmpilot/hardening.sh 2>/dev/null || echo 0) lines (runs post-LAN via deploy)"
   - printf '%s STEP %s done lines=%s ts=%s\n' "::" "provision:policy-delivered" "$(wc -l < /etc/vmpilot/hardening.sh 2>/dev/null || echo 0)" "$(date +%s)"
-  # Offline first boot (lan-up-last): no global IPv4 means the LAN cable is
-  # disconnected. Every local provisioning step above is complete — power off
-  # so deploy connects the LAN onto a fully-provisioned guest (no network
-  # fetch can delay readiness afterwards). Online boots skip this entirely.
-  # Power state IS the completion signal (observable via govc, no network).
+  # Offline first boot (lan-up-last): every local provisioning step above is
+  # complete, so power off and let deploy connect the LAN onto a
+  # fully-provisioned guest (no network fetch can delay readiness afterwards).
+  #
+  # DETECTION (changed 2026-10-15): this used to test for a global IPv4 address,
+  # which is WRONG — `netplan apply` above assigns the STATIC address to the
+  # interface regardless of whether the cable is connected, so an address was
+  # ALWAYS present and the guest never powered off (every deploy silently ran as
+  # an online boot). The real offline signals are the link carrier being down or
+  # the absence of a default route. Power state is the completion signal the
+  # host observes (govc), so no network is needed to report success.
   - |
-    if [ -z "$(ip -4 addr show scope global 2>/dev/null | grep -oP 'inet \K[0-9.]+' | grep -v '^169\.254\.')" ]; then
-      echo "VMPilot: offline first boot complete — powering off for LAN-up"
+    _carrier=1
+    for _if in /sys/class/net/*; do
+      [ -e "$_if" ] || continue
+      [ -f "$_if/carrier" ] || continue
+      c=$(cat "$_if/carrier" 2>/dev/null || echo 0)
+      [ "$c" = "1" ] && _carrier=0
+    done
+    _defroute=$(ip -4 route show default 2>/dev/null | head -1)
+    if [ "$_carrier" = "1" ] || [ -z "$_defroute" ]; then
+      echo "VMPilot: offline first boot complete (carrier=$${_carrier} default-route='$${_defroute:-none}') — powering off for LAN-up"
       poweroff
+    else
+      echo "VMPilot: online first boot (carrier up, default route present) — continuing"
     fi
 
 final_message: "VMPilot provisioning complete"

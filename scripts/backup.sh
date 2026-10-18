@@ -191,6 +191,18 @@ do_backup() {
   [ -n "$stage" ] && rm -rf "$stage"
   trap - EXIT
   ok "Done: $(basename "$file") ($(du -h "$file" | cut -f1))"
+  # ── size guard (2026-10-18) ──────────────────────────────────────────────
+  # The archive is fine; the REPO is what filled the disk once (99 GB of LFS
+  # blobs). Cap its history and prune unreachable objects on every backup run,
+  # and print the numbers, so a growth trend shows up in the cron mail instead
+  # of being discovered at 100 %.
+  if [ -f "${PROJECT_DIR}/scripts/git-maintenance.sh" ]; then
+    KEEP_COMMITS="${KEEP_COMMITS:-10}" bash "${PROJECT_DIR}/scripts/git-maintenance.sh" --apply --keep "${KEEP_COMMITS:-10}" 2>&1 | sed 's/^/  /' || warn "git maintenance failed (repo may keep growing)"
+  fi
+  local used_pct=$(df -h "$PROJECT_DIR" | tail -1 | awk '{gsub("%","",$5); print $5}')
+  if [ "${used_pct:-0}" -ge 85 ]; then
+    warn "disk ${used_pct}% full — check /opt/terraform-lab/git-lfs-store (git lfs prune) or raise the volume"
+  fi
   # Rotation: keep max 5
   while [ $(ls -t "${BACKUP_DIR}/${PROJECT_NAME}-backup-"*.tar.gz 2>/dev/null | wc -l) -gt 5 ]; do
     local old=$(ls -t "${BACKUP_DIR}/${PROJECT_NAME}-backup-"*.tar.gz 2>/dev/null | tail -1)

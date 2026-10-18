@@ -71,8 +71,14 @@ variable "tags" {
 }
 
 # ─── VM Configs (Multi-VM mode) ─────────────────────────────────────────
+variable "target_vms" {
+  description = "VM names this run targets (empty = whole env). Scopes the IPAM data source so a plan never depends on an unrelated config entry. Set by scripts/deploy-vm.sh."
+  type        = list(string)
+  default     = []
+}
+
 variable "ipam_base_ip" {
-  description = "IPAM fallback scan start (first IP tried when no config pin). Per-vCenter — set in each deploy/<vcenter>/<env>/ per-VM file."
+  description = "IPAM fallback scan start (first IP tried when no config pin). Per-vCenter — set in each deploy/<server>/<vcenter>/<env>/ per-VM file."
   type        = string
   default     = "198.51.100.10"
 }
@@ -147,7 +153,7 @@ variable "vm_configs" {
   default = {}
 }
 
-# OS access each GROUP grants to extra_users (see secure/<vc>/<env>/user-groups.tfvars).
+# OS access each GROUP grants to extra_users (see secure/<srv>/<vc>/<env>/user-groups.tfvars).
 # Users are members of groups; permission lives on the group. Policy-loaded by
 # deploy-vm.sh; empty = full-sudo fallback (legacy behaviour).
 variable "user_groups" {
@@ -159,6 +165,12 @@ variable "user_groups" {
     description = optional(string, "")
   }))
   default = {}
+}
+
+variable "hardening_script" {
+  description = "Operator hardening script, verbatim (deploy-vm.sh concatenates DC + env hardening.sh files). Empty = skip."
+  type        = string
+  default     = ""
 }
 
 # ─── Legacy Single-VM variables ─────────────────────────────────────────

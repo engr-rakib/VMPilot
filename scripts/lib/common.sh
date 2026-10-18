@@ -33,12 +33,58 @@ pstep() { # $1=script $2=phase $3=status [$4=detail]
   # Per-VM pipeline log (set PIPELINE_LOG=<file> by the caller): every marker
   # of every run APPENDS here — full lifecycle history per VM, CLI-readable.
   # Plain format (no ANSI), same contract otherwise.
-  if [ -n "${PIPELINE_LOG:-}" ]; then
+  # When the whole run is being teed into this same file (pipeline_tee_on), the
+  # line above already lands there — appending again would double every marker.
+  if [ -n "${PIPELINE_LOG:-}" ] && [ "${PIPELINE_TEE:-false}" != true ]; then
     echo ":: STEP $1:$2 $3${4:+ $4} ts=${_ts}" >> "$PIPELINE_LOG" 2>/dev/null || true
   fi
 }
+# Send the ENTIRE run output (not just markers) into the pipeline log.
+# The WebUI imports a CLI run's log slice as its job output, so with markers
+# only the Execution-logs tab of a terminal-la run was empty. Teeing makes the
+# shared log the full picture; pstep then skips its own append (see above).
+pipeline_tee_on() {
+  [ -n "${PIPELINE_LOG:-}" ] || return 0
+  [ "${PIPELINE_TEE:-false}" = true ] && return 0
+  PIPELINE_TEE=true
+  export PIPELINE_TEE
+  exec > >(tee -a "$PIPELINE_LOG") 2>&1
+}
+# Per-VM pipeline log LOCATION (2026-10-14, single source — all callers use
+# this): runtime history lives under .cache/pipelines/<vc>/<env>/, NOT next to
+# the tfvars (config dirs stay clean + git-quiet; .cache/ is gitignored).
+# One-time migration: an old ENV_DIR file moves over on first use (history kept).
+# Sets PIPELINE_LOG. Call AFTER ROOT_DIR + VC/ENV/VM are final.
+pipeline_log_for() { # $1=vc $2=env $3=vm-name [$4=old-env-dir]
+  local _dir="${ROOT_DIR:-.}/.cache/pipelines/$1/$2" _old="${4:-}/.pipeline-$3.log"
+  mkdir -p "$_dir" 2>/dev/null || true
+  chmod 777 "$_dir" 2>/dev/null || true
+  PIPELINE_LOG="${_dir}/.pipeline-$3.log"
+  if [ -n "$_old" ] && [ ! -f "$PIPELINE_LOG" ] && [ -f "$_old" ]; then
+    mv -f "$_old" "$PIPELINE_LOG" 2>/dev/null || true
+  fi
+  chmod 666 "$PIPELINE_LOG" 2>/dev/null || true
+}
+# Per-env runtime STATE dir (2026-10-14, single source): markers, IP memory
+# and locks live under .cache/state/<vc>/<env>/ — NOT next to the tfvars
+# (config dirs hold inventory only; .cache/ is gitignored). Sets STATE_DIR.
+# One-time migration: legacy ENV_DIR dotfiles move over on first use.
+# Call AFTER ROOT_DIR + VC/ENV are final, BEFORE any marker/lock/IP access.
+state_dir_for() { # $1=vc $2=env [$3=old-env-dir]
+  local _f
+  STATE_DIR="${ROOT_DIR:-.}/.cache/state/$1/$2"
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  chmod 777 "$STATE_DIR" 2>/dev/null || true
+  if [ -n "${3:-}" ] && [ -d "$3" ]; then
+    for _f in "$3"/.hardening-*.failed "$3"/.last-ip-*; do
+      [ -f "$_f" ] || continue
+      [ -f "${STATE_DIR}/$(basename "$_f")" ] || mv -f "$_f" "$STATE_DIR/" 2>/dev/null || true
+    done
+    rm -f "$3/.ipam.lock" 2>/dev/null || true   # lock state never migrates
+  fi
+}
 # Start (or continue) the per-VM pipeline log: run header line. Call once per
-# invocation AFTER setting PIPELINE_LOG.
+# invocation AFTER pipeline_log_for().
 pipeline_log_header() { # $1=script-name (rest of $0/$* auto)
   [ -n "${PIPELINE_LOG:-}" ] || return 0
   echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) $1 ===" >> "$PIPELINE_LOG" 2>/dev/null || true

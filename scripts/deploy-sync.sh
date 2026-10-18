@@ -69,6 +69,17 @@ vdir_for() {
   local _r="${ROOT_DIR:-.}"; if [ -d "${_r}/$1/${2##*_}/$2" ]; then echo "$1/${2##*_}/$2"; else echo "$1/$2"; fi
 }
 ENV_DIR="${ROOT_DIR}/$(vdir_for deploy "$VCENTER")/${ENV}"
+# Runtime per-env state (markers, IP memory — under .cache/state, not tfvars).
+state_dir_for "$VCENTER" "$ENV" "$ENV_DIR"
+# Env-wide lifecycle log: sync owns an ENVIRONMENT, not a single VM, so its run
+# history is .pipeline-env.log. Without PIPELINE_LOG every deploy-sync marker
+# went to stdout only — fine for a WebUI job (its job log captures stdout), but
+# a CLI `deploy-sync.sh` run left NO trace at all, so the WebUI could not show
+# it. Same contract as the per-VM logs (see lib/common.sh pipeline_log_header).
+pipeline_log_for "$VCENTER" "$ENV" "env" "$ENV_DIR"
+pipeline_log_header "deploy-sync $VCENTER $ENV env"
+# Full run output into the shared log (WebUI imports this slice for CLI runs).
+pipeline_tee_on
 
 [ -d "$ENV_DIR" ] || die "Env dir not found: ${ENV_DIR}"
 
@@ -159,8 +170,10 @@ for vm in $(tracked_vm); do
   fi
 done
 
+pstep deploy-sync scan done "${#CFG_KEY[@]}-configs"
+
 # ─── R1/R2/R3: iterate config files ───────────────────────────────────────
-# R3 needs the last-APPLIED IP (.last-ip-<vm>, written by deploy-vm post-apply).
+# R3 needs the last-APPLIED IP (.cache/state/<vc>/<env>/.last-ip-<vm>, written by deploy-vm post-apply).
 # State outputs report null for guestinfo-set IPs, and comparing the file to
 # itself always "matches" (the old dead-code bug) — the marker file is truth.
 for host in "${!CFG_KEY[@]}"; do
@@ -169,17 +182,17 @@ for host in "${!CFG_KEY[@]}"; do
   file="${CFG_FILE[$host]}"
   want_ip="${CFG_IP[$host]}"
   tracked_ip=""
-  if [ -f "${ENV_DIR}/.last-ip-${host}" ]; then
-    tracked_ip="$(head -n1 "${ENV_DIR}/.last-ip-${host}" 2>/dev/null | tr -d ' \t\r\n' || true)"
+  if [ -f "${STATE_DIR}/.last-ip-${host}" ]; then
+    tracked_ip="$(head -n1 "${STATE_DIR}/.last-ip-${host}" 2>/dev/null | tr -d ' \t\r\n' || true)"
   fi
   [ "$tracked_ip" = "null" ] && tracked_ip=""
 
   if grep -q '^module\.vm\["'$host'"\]' <<< "$STATE_LIST"; then
     # VM already tracked — but a hardening-failure marker means it is
     # UNHARDENED: never R2-skip, fall through to R3 retry instead.
-    if [ -f "${ENV_DIR}/.hardening-${host}.failed" ]; then
+    if [ -f "${STATE_DIR}/.hardening-${host}.failed" ]; then
       info "R3 retry: ${host}  (previous hardening failed — retrying deploy + hardening)"
-      pstep deploy-sync vm-retry start "${host}"
+      [ "$MODE" = "plan" ] || pstep deploy-sync vm-retry start "${host}"
     elif [ -n "$tracked_ip" ] && [ "$tracked_ip" = "$want_ip" ]; then
       info "R2 skip: ${host}  (ip ${tracked_ip} unchanged)"
       pstep deploy-sync vm-skip done "${host}"
@@ -188,19 +201,19 @@ for host in "${!CFG_KEY[@]}"; do
     elif [ -z "$tracked_ip" ]; then
       # Legacy (pre-marker) tracked VM: adopt the current file IP as baseline
       # instead of redeploying the fleet once — future edits ARE detected.
-      echo "$want_ip" > "${ENV_DIR}/.last-ip-${host}" 2>/dev/null || true
-      chmod 666 "${ENV_DIR}/.last-ip-${host}" 2>/dev/null || true
+      echo "$want_ip" > "${STATE_DIR}/.last-ip-${host}" 2>/dev/null || true
+      chmod 666 "${STATE_DIR}/.last-ip-${host}" 2>/dev/null || true
       info "R2 skip: ${host}  (baseline adopted: ${want_ip})"
       pstep deploy-sync vm-skip done "${host}"
       SKIPPED=$((SKIPPED + 1))
       continue
     else
       info "R3 deploy: ${host}  (ip ${tracked_ip} → ${want_ip})"
-      pstep deploy-sync vm-deploy start "${host}"
+      [ "$MODE" = "plan" ] || pstep deploy-sync vm-deploy start "${host}"
     fi
   else
     info "R1 deploy: ${host}  (new VM, next free IP)"
-      pstep deploy-sync vm-deploy start "${host}"
+    [ "$MODE" = "plan" ] || pstep deploy-sync vm-deploy start "${host}"
   fi
 
   # Completeness gate (all modes incl. list-preview): a skeleton config
@@ -215,23 +228,34 @@ for host in "${!CFG_KEY[@]}"; do
   if [ -n "$_incomplete" ]; then
     warn "R0 skip: ${host} (incomplete config, missing:${_incomplete} — finish it first, no deploy attempted)"
     pstep deploy-sync vm-incomplete skip "${host}"
+    [ "$MODE" = "plan" ] && pstep deploy-sync vm-plan skip "${host}-incomplete"
     SKIPPED=$((SKIPPED + 1))
     continue
   fi
 
   CHANGED=$((CHANGED + 1))
 
+  if [ "$MODE" = "plan" ]; then pstep deploy-sync vm-plan start "${host}"; fi
+
   if [ "$MODE" = "list" ]; then
     continue
   fi
 
   if [ "$MODE" = "plan" ]; then
-    bash "${SCRIPT_DIR}/deploy-vm.sh" "$VCENTER" "$ENV" "$host" --plan || true
+    if bash "${SCRIPT_DIR}/deploy-vm.sh" "$VCENTER" "$ENV" "$host" --plan; then
+      pstep deploy-sync vm-plan done "${host}"
+    else
+      _drc=$?
+      warn "plan failed for ${host} (rc=${_drc}) — continuing with remaining VMs"
+      pstep deploy-sync vm-plan fail "${host}-rc=${_drc}"
+      FAILED="${FAILED} ${host}(rc=${_drc})"
+      FAILED_N=$((FAILED_N + 1))
+    fi
   else
     # A deploy that exits 3 (hardening failed) must NOT abort the loop —
     # record it and continue; the summary below fails loudly instead.
     if bash "${SCRIPT_DIR}/deploy-vm.sh" "$VCENTER" "$ENV" "$host"; then
-      rm -f "${ENV_DIR}/.hardening-${host}.failed" 2>/dev/null || true
+      rm -f "${STATE_DIR}/.hardening-${host}.failed" 2>/dev/null || true
       pstep deploy-sync vm-deploy done "${host}"
     else
       _drc=$?

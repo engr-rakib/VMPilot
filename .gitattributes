@@ -1,0 +1,5 @@
+# The live WebUI SQLite DB is NOT in git — it changes mid-write and is 320 MB.
+# The private snapshot stores a GZIPPED copy at vmpilot-webui/data/db/webui.db.gz
+# (see github/vmpilot-sync.sh), which is an ordinary blob: git-lfs never sees it,
+# so one sync can no longer add a 320 MB object to .git/lfs/objects.
+vmpilot-webui/data/db/webui.db.gz -text

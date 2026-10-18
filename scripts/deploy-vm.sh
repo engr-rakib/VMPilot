@@ -25,7 +25,7 @@ set -euo pipefail
 #   ./scripts/deploy-vm.sh <vcenter> <env> <vm-name> --pipeline # show this VM's pipeline history
 #
 # Exit codes: 0 = deployed + LAN + hardening OK · 1 = error · 3 = VM deployed
-# but HARDENING FAILED (marker deploy/<srv>/<vc>/<env>/.hardening-<vm>.failed;
+# but HARDENING FAILED (marker .cache/state/<vc>/<env>/.hardening-<vm>.failed;
 # retry with --lan-up; deploy-sync R2 never skips marked VMs).
 # 124 = terraform apply timed out (30 min, hung vSphere task).
 #   Example:
@@ -98,11 +98,16 @@ vdir_for() {
 }
 ENV_DIR="${ROOT_DIR}/$(vdir_for deploy "$VCENTER")/${ENV}"
 # Per-VM pipeline log: EVERY STEP marker of EVERY run appends here (host-side
-# lifecycle history). CLI: --pipeline prints it; UI parses the same lines.
-PIPELINE_LOG="${ENV_DIR}/.pipeline-${VM_NAME}.log"
+# lifecycle history, under .cache/pipelines — not next to the tfvars).
+# CLI: --pipeline prints it; UI parses the same lines.
+pipeline_log_for "$VCENTER" "$ENV" "$VM_NAME" "$ENV_DIR"
+# Runtime per-env state (markers, IP memory — under .cache/state, not tfvars).
+state_dir_for "$VCENTER" "$ENV" "$ENV_DIR"
 if [ "$SHOW_PIPE" = true ]; then
   if [ -f "$PIPELINE_LOG" ]; then
     grep -a ":: STEP" "$PIPELINE_LOG" | tail -60
+  elif [ -f "${ENV_DIR}/.pipeline-${VM_NAME}.log" ]; then
+    grep -a ":: STEP" "${ENV_DIR}/.pipeline-${VM_NAME}.log" | tail -60
   else
     echo "no pipeline history yet for ${VM_NAME} (runs here after the first deploy)"
   fi
@@ -120,6 +125,8 @@ if [ -z "$CONFIG_FILE" ]; then
   exit 1
 fi
 pipeline_log_header "deploy-vm $VCENTER $ENV $VM_NAME"
+# Full run output into the shared log (WebUI imports this slice for CLI runs).
+pipeline_tee_on
 
 info "VM config: ${CONFIG_FILE}"
 
@@ -490,13 +497,59 @@ lan_up() {
   export GOVC_PASSWORD="$(grep -oP 'vsphere_password\s*=\s*"\K[^"]+' "$_tf" | head -1)"
   export GOVC_INSECURE=true GOVC_PERSIST_SESSION=false TERM=dumb
   export GOVC_DATACENTER="$(cfg_topval datacenter)"
+  # Phase 0: FORCE the first boot to be OFFLINE — BEFORE any guest wait.
+  # terraform's network_interface adds each vNIC in a CONNECTED state, so a
+  # fresh clone boots online and cloud-init's netplan stage hands the guest a
+  # live address mid-provisioning. Disconnecting the cable right after the
+  # Tools handshake makes the whole guest-side install (partitions, LVM, users,
+  # tools) run without a network — deterministic and faster — and lets the
+  # guest hand off with a clean poweroff. LAN is connected afterwards.
+  # ORDER MATTERS: this runs BEFORE the Tools handshake, not after. The guest
+  # hand-off is the LAST cloud-init runcmd step, so a disconnect that lands
+  # after cloud-init has already run the network stage can never trigger a
+  # poweroff — the job then waits the full window for a signal that can no
+  # longer arrive. VMware Tools work through the host, not the guest network,
+  # so the handshake below is unaffected by the cable being down.
+  # Skipped when the operator passes --lan-up (connect NOW is the request) and
+  # when a template already forces a powered-off hand-off.
+  _ensure_offline=1
+  # --lan-up is a retry on an already-provisioned VM ("connect the LAN NOW"), and
+  # --no-lan opts out of LAN work entirely: in both, forcing an offline first
+  # boot would fight the operator. Never disconnect during a retry.
+  [ "${LANUP_ONLY:-false}" = true ] && _ensure_offline=0
+  [ "${LANUP_SKIP_OFFLINE:-false}" = true ] && _ensure_offline=0
+  pstep deploy-vm offline-boot start "disconnecting NICs for an offline first boot"
+  if [ "$_ensure_offline" = 1 ]; then
+    local _nics0 _n0 _disc=0
+    _nics0=$(timeout 20 govc device.info -vm "$VM_NAME" -json 2>/dev/null \
+      | jq -r '.devices[]? | select(.name // "" | startswith("ethernet-")) | .name' 2>/dev/null || true)
+    [ -z "$_nics0" ] && _nics0=$(govc device.ls -vm "$VM_NAME" 2>/dev/null | grep -oE 'ethernet-[0-9]+' || true)
+    for _n0 in $_nics0; do
+      if govc device.disconnect -vm "$VM_NAME" "$_n0" >/dev/null 2>&1; then
+        _disc=$(( _disc + 1 ))
+        info "offline first boot: ${VM_NAME}/${_n0} disconnected"
+      else
+        warn "could not disconnect ${VM_NAME}/${_n0} — guest may boot online"
+      fi
+    done
+    if [ "$_disc" -gt 0 ]; then
+      pstep deploy-vm offline-boot done "${_disc}-nic"
+      ok "Guest provisioning will run OFFLINE (LAN comes up afterwards)"
+    else
+      pstep deploy-vm offline-boot warn "no-nic-disconnected"
+      warn "no NIC disconnected — proceeding with an online first boot"
+    fi
+  else
+    pstep deploy-vm offline-boot skip "lan-up-requested"
+  fi
+
   # Phase 1: guest fully ready = powered on + Tools running (no network needed
   # for this check — govc talks to the host, not the guest).
   info "LAN: waiting for ${VM_NAME} to be fully ready (power + Tools)…"
   pstep deploy-vm guest-ready start "waiting for power + VMware Tools"
   local _i=0 _st=""
   while [ "$_i" -lt 120 ]; do
-    _st=$(govc vm.info -json "$VM_NAME" 2>/dev/null \
+    _st=$(timeout 20 govc vm.info -json "$VM_NAME" 2>/dev/null \
       | jq -r '[.virtualMachines[]? | "\(.runtime.powerState)/\(.guest.toolsStatus // "none")" ] | join(",")' 2>/dev/null || true)
     case "$_st" in
       *poweredOn/toolsOk*|*poweredOn/toolsOld*) break ;;
@@ -515,12 +568,23 @@ lan_up() {
   pstep deploy-vm lan-connect start "checking OS installation and connecting NICs"
   if [ "${LANUP_SKIP_GATE:-false}" != true ]; then
   info "LAN: waiting for OS installation to complete…"
+  # The offline hand-off is a FIRST-BOOT event: if cloud-init already ran its
+  # runcmd (including the poweroff check) while the cable was still up, the
+  # guest will NEVER power off. Waiting the full 15 min for a signal that can
+  # no longer arrive is pure dead time, so this waits a bounded window and then
+  # connects the LAN anyway. Override with LANUP_OFFLINE_WAIT (seconds/5).
+  _offline_budget=$(( ${LANUP_OFFLINE_WAIT:-480} / 5 ))
+  [ "$_offline_budget" -lt 6 ] && _offline_budget=6
   _i=0 _st="" _ip="" _mode=""
-  while [ "$_i" -lt 180 ]; do
-    _st=$(govc vm.info -json "$VM_NAME" 2>/dev/null \
+  while [ "$_i" -lt "$_offline_budget" ]; do
+    # EVERY govc call inside a poll loop must be bounded. `govc vm.ip` BLOCKS
+    # for minutes on a VM with no network (no IP to report, retries internally)
+    # — an unbounded call froze the whole deploy for 12+ min with the marker
+    # stuck on lan-connect start. timeout makes a slow call a skipped sample.
+    _st=$(timeout 20 govc vm.info -json "$VM_NAME" 2>/dev/null \
       | jq -r '.virtualMachines[0].runtime.powerState // empty' 2>/dev/null || true)
     if [ "$_st" = "poweredOff" ]; then _mode="offline"; break; fi
-    _ip=$(govc vm.ip -v4 "$VM_NAME" 2>/dev/null || true)
+    _ip=$(timeout 20 govc vm.ip -v4 "$VM_NAME" 2>/dev/null || true)
     if [ -n "$_ip" ]; then _mode="online"; break; fi
     sleep 5; _i=$((_i+1))
   done
@@ -528,12 +592,18 @@ lan_up() {
     ok "OS installation complete (powered off clean) — bringing LAN up"
   elif [ "$_mode" = "online" ]; then
     info "guest already has IP ${_ip} (online boot) — ensuring LAN connected"
+  elif [ "$_i" -ge "$_offline_budget" ] && [ "$_st" = "poweredOn" ]; then
+    # Guest is up but no clean hand-off within the window: cloud-init already
+    # ran its network stage, so this deploy provisioned online. Reconnect the
+    # LAN now instead of stalling the job.
+    warn "no offline hand-off within $(( _offline_budget * 5 ))s (power=${_st}) — the first boot provisioned online; connecting LAN now"
+    _mode="online-late"
   else
     warn "no clean signal after 15 min (power=${_st:-unknown}, ip=${_ip:-none}) — connecting LAN anyway"
   fi
   fi
   local _nics _n
-  _nics=$(govc device.info -vm "$VM_NAME" -json 2>/dev/null \
+  _nics=$(timeout 20 govc device.info -vm "$VM_NAME" -json 2>/dev/null \
     | jq -r '.devices[]? | select(.name // "" | startswith("ethernet-")) | .name' 2>/dev/null || true)
   [ -z "$_nics" ] && _nics=$(govc device.ls -vm "$VM_NAME" 2>/dev/null | grep -oE 'ethernet-[0-9]+' || true)
   if [ -z "$_nics" ]; then
@@ -561,7 +631,7 @@ lan_up() {
   local _ip="" _i=0
   pstep deploy-vm guest-ip start "waiting for VMware guest IPv4"
   while [ "$_i" -lt 60 ]; do
-    _ip=$(govc vm.ip -v4 "$VM_NAME" 2>/dev/null || true)
+    _ip=$(timeout 20 govc vm.ip -v4 "$VM_NAME" 2>/dev/null || true)
     [ -n "$_ip" ] && break
     sleep 5; _i=$((_i+1))
   done
@@ -678,7 +748,7 @@ lan_up() {
     if timeout 1500 "${_SSH_ARR[@]}" "ubuntu@${_ip}" "export VMPILOT_SSH_KEY='${_VMKEY}'; sudo bash -c 'bash /etc/vmpilot/hardening.sh >> /var/log/vmpilot-hardening.log 2>&1'; echo \"HARDEN_RC=\$?\"" 2>/dev/null | grep -q "HARDEN_RC=0"; then
       ok "hardening applied on ${VM_NAME} (see /var/log/vmpilot-hardening.log)"
       pstep deploy-vm hardening done
-      rm -f "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
+      rm -f "${STATE_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
       # ONE batched guest fetch (was 3 SSH handshakes): manifest + CHECKs +
       # STEP markers + tool inventory. Tracking cost ≈ one round-trip.
       pstep deploy-vm checks start "collecting hardening validation checks"
@@ -701,7 +771,7 @@ lan_up() {
       # Host-side status marker: the VM exists but is UNHARDENED. deploy-sync
       # R2 must not treat it as done — clear with: hardening re-run (deploy
       # --lan-up) or manual run, which rm's this file on success.
-      date -u +%Y-%m-%dT%H:%M:%SZ > "${ENV_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
+      date -u +%Y-%m-%dT%H:%M:%SZ > "${STATE_DIR}/.hardening-${VM_NAME}.failed" 2>/dev/null || true
       _HARDEN_FAILED=3
       pstep deploy-vm hardening fail "see-log"
       pstep deploy-vm checks skip "hardening-failed"
@@ -747,7 +817,7 @@ if [ "$LANUP_ONLY" = true ]; then
   lan_up; _lan_rc=$?
   bash "$DECRYPT_SCRIPT" "$VCENTER" "$ENV" --clean
   if [ "$_lan_rc" = "3" ]; then
-    error "LAN is up but hardening FAILED for ${VM_NAME} — marker: ${ENV:-?}/.hardening-${VM_NAME}.failed. Re-run --lan-up after fixing SSH, or run hardening manually."
+    error "LAN is up but hardening FAILED for ${VM_NAME} — marker: .cache/state/${VCENTER}/${ENV:-?}/.hardening-${VM_NAME}.failed. Re-run --lan-up after fixing SSH, or run hardening manually."
   fi
   exit "$_lan_rc"
 fi
@@ -787,6 +857,13 @@ for t in "${TARGETS[@]}"; do
   TARGET_ARGS+=( -target="$t" )
 done
 
+# Scope the IPAM data source to the targeted VM only. `-target` prunes
+# RESOURCES but never data-source reads, so without this every plan in the env
+# also evaluates next_free_ip.sh for every OTHER config entry — a single
+# unrelated VM (e.g. an imported, powered-off VM with no pinned IP) could then
+# fail the plan for the VM actually being deployed.
+TARGET_VM_ARGS=( -var="target_vms=[\"${VM_NAME}\"]" )
+
 if [ "$MODE" = "plan" ]; then
   info "Planning: ${VM_NAME}"
   pstep deploy-vm plan start
@@ -794,7 +871,7 @@ if [ "$MODE" = "plan" ]; then
   set +e
   terraform -chdir="$TF_DIR" plan \
     -state="${STATE_FILE}" \
-    -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}" 2>&1 | tee "${_PLAN_LOG}"
+    -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}" "${TARGET_VM_ARGS[@]}" 2>&1 | tee "${_PLAN_LOG}"
   _TF_RC=${PIPESTATUS[0]}
   set -e
   if [ "${_TF_RC}" -ne 0 ]; then
@@ -834,7 +911,7 @@ else
   # job forever — timeout kills it, rc=124 maps to a clear marker below.
   timeout 1800 terraform -chdir="$TF_DIR" apply -auto-approve \
     -state="${STATE_FILE}" \
-    -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}" 2>&1 | tee "${_APPLY_LOG}"
+    -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}" "${TARGET_VM_ARGS[@]}" 2>&1 | tee "${_APPLY_LOG}"
   _TF_RC=${PIPESTATUS[0]}
   set -e
   if [ "${_TF_RC}" -ne 0 ]; then
@@ -874,8 +951,8 @@ else
   # Also record the last-APPLIED ip (.last-ip-<vm>) — deploy-sync R3 compares
   # the file against THIS (state outputs report null for guestinfo-set IPs).
   if [ -n "$ASSIGNED_IP" ]; then
-    echo "$ASSIGNED_IP" > "${ENV_DIR}/.last-ip-${VM_NAME}" 2>/dev/null || true
-    chmod 666 "${ENV_DIR}/.last-ip-${VM_NAME}" 2>/dev/null || true
+    echo "$ASSIGNED_IP" > "${STATE_DIR}/.last-ip-${VM_NAME}" 2>/dev/null || true
+    chmod 666 "${STATE_DIR}/.last-ip-${VM_NAME}" 2>/dev/null || true
     CUR_IP="$(grep -oE 'ip_address[[:space:]]*=[[:space:]]*"[0-9.]+"' "$CONFIG_FILE" | grep -oE '[0-9.]+' | head -n1 || true)"
     if [ -n "$CUR_IP" ] && [ "$CUR_IP" != "$ASSIGNED_IP" ]; then
       # Replace only the ip_address line inside this VM's entry block.
@@ -910,7 +987,7 @@ else
     else
       _lan_rc=$?
       if [ "$_lan_rc" = "3" ]; then
-        error "Deployed but HARDENING FAILED: ${VM_NAME} (marker .hardening-${VM_NAME}.failed) — retry: bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME} --lan-up"
+        error "Deployed but HARDENING FAILED: ${VM_NAME} (marker .cache/state/.hardening-${VM_NAME}.failed) — retry: bash scripts/deploy-vm.sh ${VCENTER} ${ENV} ${VM_NAME} --lan-up"
         pstep deploy-vm pipeline fail "hardening-failed"
         exit 3
       fi

@@ -75,11 +75,11 @@ locals {
   policy_hash = length(var.user_groups) > 0 ? sha256(jsonencode(var.user_groups)) : "legacy-fallback"
 
   resolved_users = [for u in var.extra_users : {
-    username = u.username
-    password = u.password
-    groups   = local.use_policy ? distinct(flatten([for g in u.groups : try(local.group_attr[g].os_groups, [])])) : (length(u.groups) > 0 ? distinct(flatten([for g in u.groups : try(local.group_attr[g].os_groups, local.group_attr["admin"].os_groups)])) : ["sudo", "adm"])
-    sudo     = local.use_policy ? join(", ", [for g in u.groups : try(local.group_attr[g].sudo, "")]) : (length(u.groups) > 0 ? join(", ", [for g in u.groups : try(local.group_attr[g].sudo, local.group_attr["admin"].sudo)]) : "ALL=(ALL) NOPASSWD:ALL")
-    shell    = local.use_policy && length(u.groups) > 0 ? try(local.group_attr[u.groups[0]].shell, "/bin/bash") : "/bin/bash"
+    username    = u.username
+    password    = u.password
+    groups      = local.use_policy ? distinct(flatten([for g in u.groups : try(local.group_attr[g].os_groups, [])])) : (length(u.groups) > 0 ? distinct(flatten([for g in u.groups : try(local.group_attr[g].os_groups, local.group_attr["admin"].os_groups)])) : ["sudo", "adm"])
+    sudo        = local.use_policy ? join(", ", [for g in u.groups : try(local.group_attr[g].sudo, "")]) : (length(u.groups) > 0 ? join(", ", [for g in u.groups : try(local.group_attr[g].sudo, local.group_attr["admin"].sudo)]) : "ALL=(ALL) NOPASSWD:ALL")
+    shell       = local.use_policy && length(u.groups) > 0 ? try(local.group_attr[u.groups[0]].shell, "/bin/bash") : "/bin/bash"
     groups_desc = local.use_policy ? join(", ", [for g in u.groups : try(local.group_attr[g].description, "")]) : ""
   }]
 
@@ -87,12 +87,12 @@ locals {
   # descriptions), written to /etc/vmpilot-access.md by cloud-init.
   manifest_lines = concat(
     ["# VMPilot access manifest — ${var.hostname}",
-     "",
-     "- Deployed from policy: secure/<vcenter>/<env>/user-groups.tfvars",
-     "- Policy fingerprint (sha256): ${local.policy_hash}",
-     "",
-     "| User | OS groups | sudo | shell | group purpose |",
-     "|------|-----------|------|-------|---------------|"],
+      "",
+      "- Deployed from policy: secure/<server>/<vcenter>/<env>/user-groups.tfvars",
+      "- Policy fingerprint (sha256): ${local.policy_hash}",
+      "",
+      "| User | OS groups | sudo | shell | group purpose |",
+    "|------|-----------|------|-------|---------------|"],
     [for u in local.resolved_users : "| ${u.username} | ${length(u.groups) > 0 ? join(", ", u.groups) : "(none)"} | ${u.sudo != "" ? u.sudo : "(none)"} | ${u.shell} | ${u.groups_desc} |"]
   )
   access_manifest = join("\n", local.manifest_lines)
@@ -101,7 +101,7 @@ locals {
 check "unknown_user_group" {
   assert {
     condition     = length(local.unknown_groups) == 0
-    error_message = "extra_users references group(s) not defined in the user-groups policy: ${join(", ", local.unknown_groups)}. Fix the group name in the per-VM config or add the group to secure/<vcenter>/<env>/user-groups.tfvars."
+    error_message = "extra_users references group(s) not defined in the user-groups policy: ${join(", ", local.unknown_groups)}. Fix the group name in the per-VM config or add the group to secure/<server>/<vcenter>/<env>/user-groups.tfvars."
   }
 }
 
@@ -118,6 +118,15 @@ resource "vsphere_virtual_machine" "this" {
   num_cpus = var.cpu
   memory   = var.memory
   firmware = var.firmware
+
+  # ── Memory reservation (opt-in, default OFF) ────────────────────────────
+  # vSphere powers a VM on only when its reservation can be guaranteed. This
+  # cluster's root pool has Mem Limit == total cluster RAM, so any non-zero
+  # reservation can block power-on even with host RAM free ("insufficient
+  # memory resources to satisfy the reservation"). Default stays 0 = the
+  # overcommit behaviour this project always ran with; turn it on per-VM
+  # (`memory_reservation` in tfvars, KB) once the cluster has real headroom.
+  memory_reservation = var.memory_reservation > 0 ? var.memory_reservation : min(floor(var.memory * var.memory_reservation_pct / 100), var.memory_reservation_max)
 
   cpu_hot_add_enabled    = var.enable_cpu_hot_add
   memory_hot_add_enabled = var.enable_memory_hot_add
@@ -181,6 +190,7 @@ resource "vsphere_virtual_machine" "this" {
         access_manifest      = local.access_manifest
         disable_auto_updates = var.disable_auto_updates
         enable_node_exporter = var.enable_node_exporter
+        hardening_script     = var.hardening_script
       })
     )
 

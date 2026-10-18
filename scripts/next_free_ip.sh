@@ -63,9 +63,22 @@ set -euo pipefail
 #   - ping     (ICMP reachability check)
 # ===========================================================================
 
-if ! command -v jq &>/dev/null; then
-  echo '{"error": "jq not installed"}'
+# Fail loudly: stdout keeps the JSON contract terraform expects, and the SAME
+# reason is echoed to stderr. Terraform's external data source shows ONLY stderr
+# in its "Error Message:" block and silently discards stdout — without this the
+# operator sees the banner plus "terraform exited 1" and no reason at all.
+fail() {
+  # The message can embed operator config (BASE_IP) — a raw `"` would break
+  # the stdout JSON contract terraform parses, so sanitize quotes first.
+  local _m
+  _m=$(printf '%s' "$1" | tr '"' "'")
+  echo "{\"error\": \"$_m\"}"
+  echo ":: IPAM ERROR: $1" >&2
   exit 1
+}
+
+if ! command -v jq &>/dev/null; then
+  fail "jq not installed"
 fi
 
 INPUT=$(cat)
@@ -81,8 +94,7 @@ RESERVE=${RESERVE:-30}
 if ! [[ "$BASE_IP" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]] \
   || [ "${BASH_REMATCH[1]}" -gt 255 ] || [ "${BASH_REMATCH[2]}" -gt 255 ] \
   || [ "${BASH_REMATCH[3]}" -gt 255 ] || [ "${BASH_REMATCH[4]}" -gt 255 ]; then
-  echo "{\"error\": \"invalid base_ip: $BASE_IP (need dotted-quad, octets 0-255)\"}"
-  exit 1
+  fail "invalid base_ip: $BASE_IP (need dotted-quad, octets 0-255)"
 fi
 
 # If range_end given, scan no further than the last IP of the block and never
@@ -130,8 +142,7 @@ for i in $(seq 0 "$MAX_ATTEMPTS"); do
   # No cross-octet carry — .255 is the last handout in this /24; going past
   # it would emit .256 (invalid) or leak into the next subnet. Stop loudly.
   if [ $((o4 + i)) -gt 255 ]; then
-    echo "{\"error\": \"range exhausted at $o1.$o2.$o3.255 (no cross-subnet carry)\"}"
-    exit 1
+    fail "range exhausted at $o1.$o2.$o3.255 (no cross-subnet carry)"
   fi
   candidate="$o1.$o2.$o3.$((o4 + i))"
   # never hand out an IP in the reserved low range (gateway + RESERVE hosts) —
@@ -145,8 +156,7 @@ for i in $(seq 0 "$MAX_ATTEMPTS"); do
   if [ -n "$BLOCK_LAST" ]; then
     IFS='.' read -r _l1 _l2 _l3 _l4 <<< "$BLOCK_LAST"
     if [ "$o1.$o2.$o3" = "$_l1.$_l2.$_l3" ] && [ $((o4 + i)) -gt "$_l4" ]; then
-      echo "{\"error\": \"No free IP found in range $BASE_IP..$BLOCK_LAST\"}"
-      exit 1
+      fail "No free IP found in range $BASE_IP..$BLOCK_LAST"
     fi
   fi
   # Honor a pre-assigned IP (skip_ip / or the VM's own base) — never move a
@@ -162,10 +172,18 @@ for i in $(seq 0 "$MAX_ATTEMPTS"); do
   _CANDS="${_CANDS} ${candidate}"
 done
 _PINGDIR="$(mktemp -d /tmp/vmpilot-ipam-XXXXXX)"
+_CAND_COUNT=0
 for _c in $_CANDS; do
-  ( ping -c1 -W2 "$_c" >/dev/null 2>&1 && echo "USED $_c" || echo "FREE $_c" ) > "$_PINGDIR/$RANDOM-$$" 2>/dev/null &
+  _CAND_COUNT=$(( _CAND_COUNT + 1 ))
+  # one file PER candidate (deterministic) — $RANDOM-$$ collides between
+  # background subshells and can drop a result, which then reads as "all used"
+  ( ping -c1 -W2 "$_c" >/dev/null 2>&1 && echo "USED $_c" || echo "FREE $_c" ) > "$_PINGDIR/$_c" 2>/dev/null &
 done
 wait
+if [ "$_CAND_COUNT" -eq 0 ]; then
+  rm -rf "$_PINGDIR"
+  fail "no candidate IPs to scan from $BASE_IP (all <= RESERVE=$RESERVE or already reserved in config files)"
+fi
 for _c in $_CANDS; do
   if grep -qxF "FREE $_c" "$_PINGDIR"/* 2>/dev/null; then
     rm -rf "$_PINGDIR"
@@ -179,5 +197,4 @@ done
 rm -rf "$_PINGDIR"
 
 echo ":: STEP ipam:scan fail \"none-free\" ts=$(date +%s)" >&2
-echo "{\"error\": \"No free IP found after $MAX_ATTEMPTS attempts from $BASE_IP\"}"
-exit 1
+fail "No free IP found after $MAX_ATTEMPTS attempts from $BASE_IP (${_CAND_COUNT:-0} candidates pinged, all answered)"

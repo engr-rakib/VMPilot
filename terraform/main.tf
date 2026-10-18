@@ -59,11 +59,35 @@ locals {
 # (deploy/*/vm-*.tfvars). next_free_ip.sh reads their ip_address values as
 # "reserved", so no separate .<vm>_ip persist file / state tracking is needed.
 locals {
+  # Which VMs actually need an IPAM sweep: IPAM enabled AND no IP pinned in the
+  # config. Single predicate — the data source below and effective_ips MUST use
+  # the same one, or a missing data source crashes the plan.
+  needs_ipam = {
+    for k, v in local.all_configs : k => (
+      v.ipam_enabled
+      && (v.ip_address == "" || v.ip_address == "0.0.0.0")
+      # When a run targets specific VMs, sweep only for those. `-target`
+      # prunes resources but NOT data-source reads, so without this filter one
+      # unrelated config entry (e.g. an imported, powered-off VM with no pinned
+      # IP) runs next_free_ip.sh on every plan and can fail the target VM's
+      # plan. Empty var = no targeting (deploy-sync / full apply) = sweep all.
+      && (length(var.target_vms) == 0 || contains(var.target_vms, k))
+    )
+  }
+
+  # Precedence: a pinned ip_address is ALWAYS the source of truth, even when
+  # ipam_enabled = false (imported / pre-deployed VM that VMPilot does not
+  # manage). try() covers a MISSING data source key only — it does NOT rescue a
+  # data source whose program exits non-zero (verified: a failed data.external
+  # read aborts the whole plan no matter what try() wraps it). So a VM with no
+  # pinned IP is a hard plan dependency for EVERY plan in the env, targeted or
+  # not: `-target` prunes resources, never data-source reads. Imported VMs must
+  # therefore always carry their real ip_address in the config file.
   effective_ips = {
     for k, v in local.all_configs : k => (
-      v.ipam_enabled && (v.ip_address != "" && v.ip_address != "0.0.0.0")
+      (v.ip_address != "" && v.ip_address != "0.0.0.0")
       ? v.ip_address
-      : data.external.next_free_ip[k].result.free_ip
+      : (v.ipam_enabled ? try(data.external.next_free_ip[k].result.free_ip, "") : "")
     )
   }
 }
@@ -71,11 +95,7 @@ locals {
 # Only resolve a free IP when the config didn't pin a real one; otherwise the
 # config's own ip_address is used directly (it's already the source of truth).
 data "external" "next_free_ip" {
-  for_each = {
-    for k, v in local.all_configs : k => v if(
-      v.ipam_enabled && (v.ip_address == "" || v.ip_address == "0.0.0.0")
-    )
-  }
+  for_each = { for k, b in local.needs_ipam : k => k if b }
 
   program = ["bash", "${path.module}/../scripts/next_free_ip.sh"]
   query = {
@@ -141,6 +161,9 @@ module "vm" {
   firmware              = each.value.firmware
   enable_cpu_hot_add    = each.value.enable_cpu_hot_add
   enable_memory_hot_add = each.value.enable_memory_hot_add
+  # Optional per-VM override (tfvars, KB). 0 = module default (currently off —
+  # this cluster's root pool Mem Limit == total RAM, so reservations block power-on).
+  memory_reservation = try(each.value.memory_reservation, 0)
 
   disk_size        = each.value.disk_size
   thin_provisioned = each.value.thin_provisioned
@@ -158,6 +181,7 @@ module "vm" {
 
   disable_auto_updates = each.value.disable_auto_updates
   enable_node_exporter = each.value.enable_node_exporter
+  hardening_script     = var.hardening_script
 }
 
 # ─── Validation: no duplicate IPs ──────────────────────────────────────

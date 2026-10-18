@@ -34,6 +34,25 @@ variable "wait_for_guest_net_timeout" {
   default     = 0
 }
 
+variable "memory_reservation" {
+  description = "Memory reservation in MB. 0 = derive from memory_reservation_pct. Reserves memory so vSphere can guarantee power-on on a busy host."
+  type        = number
+  default     = 0
+}
+
+variable "memory_reservation_pct" {
+  description = "Percent of guest memory to reserve when memory_reservation is 0. DEFAULT 0 = no reservation (vSphere overcommit, the behaviour this project ran with for years — the cluster root pool has Mem Limit == total cluster RAM, so ANY reservation makes the scheduler refuse power-on). Raise it only when the cluster has real headroom."
+  type        = number
+  default     = 0
+}
+
+variable "memory_reservation_max" {
+  description = "Hard cap (KB, the same unit as `memory`) on the derived reservation so a large VM never demands an unmeetable guarantee. 2097152 KB = 2 GiB. Note: vSphere memory is in KB here — a value of 2048 means 2 MB, not 2 GB."
+  type        = number
+  default     = 2097152
+}
+
+
 variable "networks" {
   description = "Network interfaces (ordered: unit 0, 1, 2...)"
   type = list(object({
@@ -155,7 +174,7 @@ variable "extra_users" {
 }
 
 variable "user_groups" {
-  description = "Group → OS access policy (os_groups/sudo/shell/description). Loaded from secure/<vc>/<env>/user-groups.tfvars"
+  description = "Group → OS access policy (os_groups/sudo/shell/description). Loaded from secure/<srv>/<vc>/<env>/user-groups.tfvars"
   type = map(object({
     os_groups   = list(string)
     sudo        = string
@@ -175,4 +194,10 @@ variable "enable_node_exporter" {
   description = "Install Prometheus node_exporter for monitoring"
   type        = bool
   default     = false
+}
+
+variable "hardening_script" {
+  description = "Operator hardening script, verbatim (deploy-vm.sh concatenates DC + env hardening.sh, terraform-escaped). Runs after OS provisioning; empty = skip."
+  type        = string
+  default     = ""
 }

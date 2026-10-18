@@ -312,10 +312,12 @@ else
 fi
 mkdir -p "${SCRIPT_DIR}/../${NDEP}/${ENV}"
 ENV_DIR="${SCRIPT_DIR}/../${NDEP}/${ENV}"
-# Per-VM pipeline log (same file deploy-vm.sh appends to — full history).
-# VM_NAME is final by now (identity section ran before ENV finalize).
-PIPELINE_LOG="${ENV_DIR}/.pipeline-${VM_NAME}.log"
+# Per-VM pipeline log (same file deploy-vm.sh appends to — full history,
+# under .cache/pipelines). VM_NAME is final by now (identity ran before ENV finalize).
+pipeline_log_for "$VCENTER" "$ENV" "$VM_NAME" "$ENV_DIR"
 pipeline_log_header "create-vm-config ${VCENTER} ${ENV} ${VM_NAME}"
+# Full run output into the shared log (WebUI imports this slice for CLI runs).
+pipeline_tee_on
 # Backfill: the identity marker printed before the log path existed.
 echo ":: STEP create-vm-config:identity done ${VM_NAME} ts=$(date +%s)" >> "$PIPELINE_LOG" 2>/dev/null || true
 
@@ -1733,10 +1735,13 @@ ENTRY
 # ===========================================================================
 # ─── IPAM finalize under lock (close the scan→write race) ────────────────
 # The scan above ran minutes ago (interactive wizard in between) — another run
-# may have claimed FREE_IP since. Hold .ipam.lock (fail fast if held), re-verify
-# against all tfvars, rescan once under lock if taken. The final write below
+# may have claimed FREE_IP since. Hold the state-dir .ipam.lock (fail fast if
+# held), re-verify against all tfvars, rescan once under lock if taken. The final write below
 # uses noclobber: if the file appeared in the micro-window after unlock, the
 # write FAILS LOUDLY instead of silently duplicating an IP (fail-closed).
+# NOTE: state_dir_for runs BEFORE the subshell — the 9> redirect below is
+# evaluated by the parent shell, so STATE_DIR must already be set here.
+state_dir_for "$VCENTER" "$ENV" "$ENV_DIR"
 (
   flock -n 9 || die "IPAM lock busy: another create is writing in ${ENV} — wait a few seconds and retry"
   if grep -rqE "ip_address[[:space:]]*=[[:space:]]*\"${FREE_IP}\"" "${ENV_DIR}"/vm-*.tfvars 2>/dev/null; then
@@ -1747,7 +1752,7 @@ ENTRY
     ok "Re-selected: ${FREE_IP}"
     pstep create-vm-config ipam done "${FREE_IP}"
   fi
-) 9>"${ENV_DIR}/.ipam.lock"
+) 9>"${STATE_DIR}/.ipam.lock"
 CONFIG_FILE="${ENV_DIR}/vm-${VM_NAME}_${FREE_IP}.tfvars"
 
 # Each tree line is both printed to the console and collected into TREE_BLOCK

@@ -44,7 +44,7 @@ secure/
 bash install.sh          # installs sops, terraform, govc, age (creates age + ssh keys)
 ```
 - age private key at `~/.config/sops/age/keys.txt` (SOPS uses it to decrypt)
-- `secure/<vcenter>/vm-defaults.conf` (per-vCenter) optionally tweaks the defaults the wizard proposes — auto-created when a vCenter is onboarded
+- `secure/<server>/<vcenter>/vm-defaults.conf` (per-vCenter) optionally tweaks the defaults the wizard proposes — auto-created when a vCenter is onboarded
 
 ### Step 1 — Onboard your vCenter (one command)
 
@@ -103,14 +103,14 @@ bash scripts/create-vm-config.sh <datacenter>_<server> <env> <vm-name>
 ```
 
 The script:
-- Picks your vCenter + env (or auto-creates the env dir under `deploy/<vcenter>/`)
-- **Auto-loads per-vCenter defaults** from `secure/<vcenter>/vcenter.tfvars`
+- Picks your vCenter + env (or auto-creates the env dir under `deploy/<server>/<vcenter>/`)
+- **Auto-loads per-vCenter defaults** from `secure/<server>/<vcenter>/vcenter.tfvars`
 - **Auto-assigns a free IP** (`next_free_ip.sh`)
 - **Auto-stores** the config in the pre-structured location:
-  `deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars`
+  `deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars`
 - Every VM gets its **own file**; existing VMs are never touched
 
-Review it (`vi deploy/<vcenter>/<env>/vm-<name>_<ip>.tfvars`), uncomment the blocks you
+Review it (`vi deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars`), uncomment the blocks you
 need (CPU, memory, disks, LVM, extra users…).
 
 ### Step 4 — Deploy a production-grade VM
@@ -121,10 +121,10 @@ bash scripts/deploy-vm.sh <datacenter>_<server> <env> <vm-name>
 ```
 
 `deploy-vm.sh` automatically:
-1. **Decrypts** that vCenter's credentials (`secure/<vcenter>/credentials.tfvars` via SOPS)
+1. **Decrypts** that vCenter's credentials (`secure/<server>/credentials.tfvars` via SOPS)
 2. **Loads the inventory**, then **merges the env child on top** — a key you uncommented
    in `<env>` (e.g. prod `datastore99`) **overrides** the parent for that deploy
-3. Assembles the **combined VM config** from every `deploy/<vcenter>/<env>/vm-*.tfvars`
+3. Assembles the **combined VM config** from every `deploy/<server>/<vcenter>/<env>/vm-*.tfvars`
 4. Targets **only your VM** and applies against that env's **own state file**
    (`terraform/terraform.<vcenter>.<env>.tfstate`)
 5. **Deletes the decrypted files** even on failure
@@ -156,7 +156,7 @@ bash scripts/deploy-vm.sh <datacenter>_<server> <env> <vm-name>
 | **One directory per vCenter** | Each vCenter's secrets/inventory are isolated — a prod deploy can never use another vCenter's credentials |
 | **Per-env overrides** | Env-specific inventory keys go in `secure/<dir>/<env>/vcenter.tfvars`; top-level file holds the shared defaults |
 | **Interactive wizard** (`vcenter-setup.sh`) | No manual `sops` syntax; menu-driven, defaults pre-filled, confirmation before write |
-| **Auto mirror dirs** | Onboarding a vCenter auto-creates `deploy/<vcenter>/{dev,prod,staging}/` — config dirs are ready before you need them |
+| **Auto mirror dirs** | Onboarding a vCenter auto-creates `deploy/<server>/<vcenter>/{dev,prod,staging}/` — config dirs are ready before you need them |
 | **Auto-merged deploys** | `deploy-vm.sh` decrypts the right credentials, merges the env override, and targets only your VM |
 | **Auto-clean on failure** | `deploy-vm.sh` traps errors and removes plaintext even when a deploy crashes |
 | **Self-verifying** | After setup, `sops-decrypt.sh <dir> <env> --clean` proves the round-trip works |
@@ -262,7 +262,7 @@ it may have leaked.
 |------|------|
 | `.sops.yaml` | SOPS creation rules (which files encrypt with which age key) |
 | `scripts/vcenter-setup.sh` | Interactive wizard — onboard a vCenter (creds + inventory + mirror dirs) |
-| `scripts/create-vm-config.sh` | Scaffold a per-VM config into `deploy/<vcenter>/<env>/` |
+| `scripts/create-vm-config.sh` | Scaffold a per-VM config into `deploy/<server>/<vcenter>/<env>/` |
 | `scripts/deploy-vm.sh` | Deploy a VM — decrypt creds, merge env override, apply, clean up |
 | `scripts/sops-encrypt.sh` | Encrypt plaintext dir → `secure/<dir>/` |
 | `scripts/sops-decrypt.sh` | Decrypt → `terraform/*.auto.tfvars`, with `--clean`/`--apply` |
