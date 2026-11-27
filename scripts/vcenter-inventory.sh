@@ -601,6 +601,14 @@ live)
       done
       for hp in "${H_PATHS[@]:-}"; do
         hname=$(govc object.collect -s "$hp" name 2>/dev/null || true); [ -n "$hname" ] || hname=$(basename "$hp")
+        # Human ESXi hostname: vCenter often registers the host by IP, so the
+        # inventory `name` is an address — qualifiedHostName is the host's own
+        # DNS identity. Optional; null when govc does not answer.
+        hfqdn=$(govc object.collect -json -s "$hp" config.network.dnsConfig 2>/dev/null \
+          | jq -r 'if type=="array" then (.[0].val // .[0]) else . end
+            | ((.hostName // "") | if . == "localhost" or . == "localhost.localdomain" then "" else . end) as $h
+            | (.domainName // "") as $d
+            | if $h == "" then "" elif $d == "" then $h else ($h + "." + $d) end' 2>/dev/null || true)
         hips=$(govc object.collect -json -s "$hp" config.network.vnic 2>/dev/null \
           | jq -r '[.[] | select((.spec.ip.ipAddress // "") != "") | .spec.ip.ipAddress] | unique | join(",")' 2>/dev/null || true)
         # Management addressing per vNIC portgroup (EXACT gateway/subnet from
@@ -670,7 +678,7 @@ live)
           _hdc=$(echo "$hp" | sed -E 's#^/##' | cut -d/ -f1)
           case "$_hdc" in vm|host|datastore|network|folder|"") _hdc="";; esac
         fi
-        H_ROWS+=("$(jq -cn --arg name "$hname" --arg ip "$hips" --arg id "$_moid" \
+        H_ROWS+=("$(jq -cn --arg name "$hname" --arg ip "$hips" --arg id "$_moid" --arg fqdn "$hfqdn" \
           --arg cluster "$_hcluster" --arg dc "$_hdc" \
           --argjson cores "$_cores" --argjson mhz "$_mhz" \
           --argjson memBytes "$_memb" --argjson cpuUsageMHz "$_cpusg" --argjson memUsageMB "$_memsg" \
@@ -680,7 +688,7 @@ live)
           --argjson mgmt "$hmgmt" \
           --argjson ns "$(printf '%s\n' "${hnets[@]:-}" | jq -R . | jq -s .)" \
           --argjson ds "$(printf '%s\n' "${hds_names[@]:-}" | jq -R . | jq -s .)" \
-          '{name:$name, ip:$ip, id:$id, datacenter:(if $dc == "" then null else $dc end), cluster:(if $cluster == "" then null else $cluster end), networks:$ns, datastores:$ds,
+          '{name:$name, ip:$ip, id:$id, fqdn:(if $fqdn == "" then null else $fqdn end), datacenter:(if $dc == "" then null else $dc end), cluster:(if $cluster == "" then null else $cluster end), networks:$ns, datastores:$ds,
             cpuCores:$cores, cpuMhz:$mhz, memoryMB:($memBytes/1024/1024),
             cpuUsageMHz:$cpuUsageMHz, memUsageMB:$memUsageMB,
             powerState:$powerState, connectionState:$connectionState, overallStatus:$overallStatus,

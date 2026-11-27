@@ -12,10 +12,10 @@
 </p>
 
 <p align="center">
-  <a href="#feature-overview"><img src="https://img.shields.io/badge/Terraform-%E2%89%A51.6-7B42BC" /></a>
-  <a href="#feature-overview"><img src="https://img.shields.io/badge/vSphere-7.x%2F8.x-00BFFF" /></a>
-  <a href="#feature-overview"><img src="https://img.shields.io/badge/SOPS-%2B%20Age-4B8BBE" /></a>
-  <a href="#feature-overview"><img src="https://img.shields.io/badge/Cloud--Init-%E2%9C%85-brightgreen" /></a>
+  <a href="#-feature-overview"><img src="https://img.shields.io/badge/Terraform-%E2%89%A51.6-7B42BC" /></a>
+  <a href="#-feature-overview"><img src="https://img.shields.io/badge/vSphere-7.x%2F8.x-00BFFF" /></a>
+  <a href="#-feature-overview"><img src="https://img.shields.io/badge/SOPS-%2B%20Age-4B8BBE" /></a>
+  <a href="#-feature-overview"><img src="https://img.shields.io/badge/Cloud--Init-%E2%9C%85-brightgreen" /></a>
   <a href="https://github.com/engr-rakib/VMPilot"><img src="https://img.shields.io/github/stars/engr-rakib/VMPilot?style=social" /></a>
   <a href="https://engr-rakib.github.io/web"><img src="https://img.shields.io/badge/Author-Engr.%20Rakib-181717?style=for-the-badge" /></a>
 </p>
@@ -54,19 +54,21 @@ keys, and even keeping your config file in sync with reality.
   - [2. Auto-Deploy Loop — drop & forget](#2-auto-deploy-loop--drop--forget)
   - [3. One-Click Environment Setup](#3-one-click-environment-setup)
   - [4. Config Guard & IP Auto-Sync](#4-config-guard--ip-auto-sync)
-  - [5. Backup & Restore](#5-backup--restore)
-  - [6. Security — encrypted by design](#6-security--encrypted-by-design)
-  - [7. Monitoring & Observability](#7-monitoring--observability)
-  - [8. Pre-Deploy Validation](#8-pre-deploy-validation)
-  - [9. Safe Destroy — nothing disappears by accident](#9-safe-destroy--nothing-disappears-by-accident)
+  - [5. Two-Phase OS Hardening & Verification](#5-two-phase-os-hardening--verification)
+  - [6. Linux Guest RBAC & Auditing](#6-linux-guest-rbac--auditing)
+  - [7. Security — encrypted by design](#7-security--encrypted-by-design)
+  - [8. Pre-Deploy Validation & Safety Gates](#8-pre-deploy-validation--safety-gates)
+  - [9. Safe Destroy — state-protected lifecycle](#9-safe-destroy--state-protected-lifecycle)
   - [10. Multi-VM & Scaling](#10-multi-vm--scaling)
   - [11. Multi-vCenter Support](#11-multi-vcenter-support)
   - [12. Customization Options](#12-customization-options)
+  - [13. S3 Remote-State Backend](#13-s3-remote-state-backend)
 - [From Zero to a Production-Grade VM](#-from-zero-to-a-production-grade-vm)
 - [Quick Start](#-quick-start)
 - [Tech Stack](#-tech-stack)
 - [Roadmap](#-roadmap)
-- [Support](#-support)
+- [Support & Documentation](#-support--documentation)
+- [Enterprise Web Console (Commercial Add-On)](#-enterprise-web-console-commercial-add-on)
 - [Author & License](#-author--license)
 
 ---
@@ -83,11 +85,13 @@ keys, and even keeping your config file in sync with reality.
 | 🌐 **Multi-vCenter Support** | dev / prod / staging on *different* vCenters, zero conflicts |
 | 🛡️ **Config Guard** | Broken configs fail fast; keys auto-fix; IPs auto-sync |
 | 🔐 **Security First** | Credentials encrypted with SOPS + Age; plaintext never persists |
+| 🔒 **Two-Phase OS Hardening** | Cloud-init delivery + live SSH run + 19 automated `CHECK` probes |
+| 👥 **Linux Guest RBAC** | Per-environment role union (`admin`/`app`/`db`/`readonly`) + `/var/log/sudo.log` |
 | 💾 **Auto Backup** | Project backup / restore with rotation in 2 commands |
-| 🛡️ **Safe Destroy** | `prevent_destroy` — a VM is never deleted by accident |
+| 🛡️ **Safe Destroy** | `destroy.sh` with state backup, W4 state removal, and W5 `govc vm.destroy` |
 | 📈 **Monitoring Ready** | Optional node_exporter + cloud-init status tracking |
 | 🚫 **Duplicate IP Guard** | Two VMs with the same IP → deployment is blocked |
-| 🧪 **Pre-Deploy Validation** | Catches mistakes before they reach vSphere |
+| 🧪 **Pre-Flight Safety Gates** | Declared IP subnet CIDR validation + 300s reboot-tolerant SSH gate |
 | 📜 **Audit Trail** | Full Terraform state + backup history + deploy logs |
 
 ---
@@ -111,7 +115,7 @@ keys, and even keeping your config file in sync with reality.
 │   └──────┬───────┘    └──────┬───────┘    └────────┬─────────┘   │
 │          │                   │                     │              │
 │          ▼                   ▼                     ▼              │
-│   deploy/<dir>/<env>/vm-<name>_<ip>.tfvars   terraform apply    │
+│   deploy/<server>/<vcenter>/<env>/vm-*.tfvars   terraform apply  │
 └───────────────────────────────────────────────────────────────────┘
                              │
                              ▼
@@ -123,13 +127,14 @@ keys, and even keeping your config file in sync with reality.
                              │
                              ▼
 ┌───────────────────────────────────────────────────────────────────┐
-│                     🐧 CLOUD-INIT (inside the VM)                 │
+│                     🐧 CLOUD-INIT & HARDENING (inside the VM)     │
 │   1. Boot → network applied → static IP assigned                 │
-│   2. OS partitions → LVM created (/, /var, swap…)               │
+│   2. OS partitions → LVM created (/, /var, swap…)                │
 │   3. Data disks detected → VG → LV → mounted                     │
-│   4. Users created → SSH key injected                            │
-│   5. Auto-updates disabled (production)                          │
-│   6. ✅ Ready in ~2–3 minutes                                    │
+│   4. Users created → SSH key injected → RBAC applied             │
+│   5. Two-phase hardening script executed + 19 CHECK probes       │
+│   6. Auto-updates disabled (production stability)                │
+│   7. ✅ Ready in ~2–3 minutes                                    │
 └───────────────────────────────────────────────────────────────────┘
 ```
 
@@ -142,24 +147,24 @@ Five layers, one config file. You only ever touch **L1** — everything below is
 ```
 ┌────────────────────────────────────────────────────────────────────┐
 │ L1  OPERATOR - the CLI you use                                     │
-│ install.sh (all-in-one) · vcenter-setup.sh · create-vm-config.sh   │
-│ deploy-vm.sh · deploy-sync.sh · backup.sh                          │
+│ install.sh · vcenter-setup.sh · create-vm-config.sh                │
+│ deploy-vm.sh · deploy-sync.sh · destroy.sh · backup.sh             │
 │ sops-encrypt.sh · sops-decrypt.sh · next_free_ip.sh                │
 ├────────────────────────────────────────────────────────────────────┤
 │ L2  CONFIG - source of truth                                       │
-│ deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars   per-VM config       │
-│ secure/<server>/<vcenter>/vcenter.tfvars               plaintext inventory  │
-│ secure/<server>/credentials.tfvars           SOPS + Age (secret)  │
+│ deploy/<server>/<vcenter>/<env>/vm-<name>_<ip>.tfvars              │
+│ secure/<server>/<vcenter>/vcenter.tfvars (plaintext inventory)     │
+│ secure/<server>/credentials.tfvars       (SOPS + Age secret)       │
 ├────────────────────────────────────────────────────────────────────┤
 │ L3  ORCHESTRATION - Terraform >= 1.6                               │
 │ main.tf for_each · module.vm · IPAM (external data source)         │
-│ check{ duplicate IP } · per-vCenter+env state files                │
+│ check{ duplicate IP } · per-vCenter+env isolated state files       │
 ├────────────────────────────────────────────────────────────────────┤
 │ L4  VSPHERE - vmware/vsphere provider + govc                       │
 │ clone template · datastore/LVM · network · guestinfo injection     │
 ├────────────────────────────────────────────────────────────────────┤
-│ L5  GUEST - cloud-init inside the VM                               │
-│ network · partition/LVM · data disks · users · SSH · exporter      │
+│ L5  GUEST - cloud-init + OS hardening inside the VM                │
+│ network · partition/LVM · data disks · users & RBAC · SSH gate     │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -167,7 +172,7 @@ Five layers, one config file. You only ever touch **L1** — everything below is
 files you can hand-edit. **L2 → L3:** Terraform merges one environment's configs
 into a single `vm_configs` map (never across vCenters). **L3 → L4:** the vSphere
 provider clones, provisions, and injects cloud-init via guestinfo.
-**L4 → L5:** cloud-init turns a blank clone into a configured server.
+**L4 → L5:** cloud-init and hardening scripts turn a blank clone into a configured server.
 
 ---
 
@@ -179,19 +184,21 @@ What actually happens inside when you deploy **one** VM:
 bash scripts/deploy-vm.sh <vcenter> <env> <vm-name>
 │
 ├─ 1  Resolve paths + the per-vCenter+env state file (isolated state)
-├─ 2  Auto-normalize the vm_configs key → VM name           (R4)
-├─ 3  Blending guard — validate every per-VM config file    (fails fast)
-├─ 4  Merge this env's configs → a single -var-file
-├─ 5  sops-decrypt credentials → *.auto.tfvars              (transient)
-├─ 6  terraform apply -target='module.vm["<vm-name>"]'
+├─ 2  Validate declared IP subnet CIDR match (fails fast before Terraform)
+├─ 3  Auto-normalize the vm_configs key → VM name           (R4)
+├─ 4  Blending guard — validate every per-VM config file    (fails fast)
+├─ 5  Merge this env's configs → a single -var-file
+├─ 6  sops-decrypt credentials → *.auto.tfvars              (transient)
+├─ 7  terraform apply -target='module.vm["<vm-name>"]'
 │      │
 │      ├─ IPAM      next_free_ip.sh → first free address
 │      ├─ CLONE     from hardened template (prevent_destroy = true)
 │      ├─ GUESTINFO inject cloud-init payload (base64, via vApp)
-│      └─ WAIT      poll SSH until cloud-init reports "done"
-├─ 7  Cleanup — decrypted creds removed, even on failure     (trap)
-├─ 8  IP auto-sync — rewrite config ip_address + filename    (R3)
-└─ 9  Report the assigned IP
+│      └─ GATE      SSH poll (15 x 20s = 300s) + auto ICMP diagnostic
+├─ 8  Execute OS hardening script (/etc/vmpilot/hardening.sh) + 19 CHECKs
+├─ 9  Cleanup — decrypted creds removed, even on failure     (trap)
+├─ 10 IP auto-sync — rewrite config ip_address + filename    (R3)
+└─ 11 Report the assigned IP
 ```
 
 The pipeline is **idempotent** — run it again and nothing changes (R2) unless the
@@ -205,7 +212,7 @@ automatically.
 
 ### 1. One-Command VM Deployment
 
-```
+```bash
 bash scripts/create-vm-config.sh
 ```
 
@@ -219,24 +226,24 @@ Answer a few prompts (vCenter → environment → VM name), and the script does 
 - **Compliance warnings** — invalid names, missing credentials, or undersized disks are
   caught immediately, with the exact fix in the message.
 
-```
+```bash
 bash scripts/deploy-vm.sh dc_pilot_192.0.2.10 prod web-01
 ```
 
 One command → credentials decrypted → `terraform apply` **targeted to only that VM** →
-cleanup. **Every other VM stays untouched.**
+SSH gate verification → hardening run → cleanup. **Every other VM stays untouched.**
 
 ---
 
 ### 2. Auto-Deploy Loop — drop & forget
 
-```
+```bash
 bash scripts/deploy-sync.sh <dir> <env>           # scan + auto-deploy new/changed
 bash scripts/deploy-sync.sh <dir> <env> --plan    # dry-run first
 bash scripts/deploy-sync.sh <dir> <env> --list    # show the diff table only
 ```
 
-Drop a new per-VM config file into `deploy/<dir>/<env>/` and the system handles the rest:
+Drop a new per-VM config file into `deploy/<server>/<vcenter>/<env>/` and the system handles the rest:
 
 | Rule | Behavior |
 |------|----------|
@@ -247,7 +254,7 @@ Drop a new per-VM config file into `deploy/<dir>/<env>/` and the system handles 
 | **R5** | A tracked VM with a missing config is **never** auto-destroyed — surfaced as a warning |
 | **R6** | Re-running is always safe — unchanged VMs are simply skipped |
 
-```
+```text
 ==========================================================
   Sync scan: deploy/dc_pilot_192.0.2.10/dev/
 ==========================================================
@@ -265,7 +272,7 @@ Drop a new per-VM config file into `deploy/<dir>/<env>/` and the system handles 
 
 Boot a brand-new Linux host and run one script — it detects the environment and installs everything automatically (deps, keys, terraform init). One command, no extra scripts:
 
-```
+```bash
 bash install.sh               # same detection, may ask before installing
 bash install.sh --yes         # fully automatic (no prompts)
 ```
@@ -293,34 +300,27 @@ Your config files are **self-healing**:
 
 ---
 
-### 5. Backup & Restore
+### 5. Two-Phase OS Hardening & Verification
 
-```
-bash scripts/backup.sh                    # interactive
-bash scripts/backup.sh /project /backup-dir   # direct
-```
+VMPilot applies a resilient two-phase hardening model:
 
-- Excludes `.git`, `.terraform`, `node_modules` automatically
-- Timestamped `.tar.gz` archives with rotation (keeps the last 5)
-- Restore pre-saves your current state first — nothing is lost
-- Remembers your paths — no need to type them twice
-
-```
-Menu:
-  1) Create backup
-  2) List backups (ID, Date, Size, Filename)
-  3) Restore from backup
-  4) Change paths (clear & re-ask — e.g. after a rename)
-  5) Exit
-```
-
-> No hardcoded paths — first run asks for project + backup dirs and remembers
-> them in `~/.backup-config`. Change them any time with menu option 4 or
-> `bash scripts/backup.sh paths`.
+1. **Phase 1 (Offline Cloud-Init Delivery)**: Cloud-init writes the hardening script into `/etc/vmpilot/hardening.sh` during first boot.
+2. **Phase 2 (Online SSH Execution)**: The deployment pipeline triggers execution over SSH, running CIS-aligned kernel sysctl tuning, SSH daemon hardening, firewall policies, and panic dump configurations.
+3. **19 Automated Verification Probes**: The script runs 19 granular `CHECK` probes (SSH root disable, password auth disable, core dump restrictions, IPv4 forwarding, `/tmp` mount options, and system auditing). If network interface issues occur, `--lan-up` fallback recovery prevents lockouts.
 
 ---
 
-### 6. Security — encrypted by design
+### 6. Linux Guest RBAC & Auditing
+
+User and group access is decoupled from individual VM definitions:
+
+- **Per-Environment User Roles**: Managed via `user-groups.tfvars` with role unions for `admin`, `app`, `db`, and `readonly` groups.
+- **Access Manifest**: Every VM receives `/etc/vmpilot-access.md` detailing provisioned accounts, public keys, and role assignments.
+- **Command Auditing**: All administrative actions are routed through `sudo` with full command logging written to `/var/log/sudo.log`.
+
+---
+
+### 7. Security — encrypted by design
 
 | Security layer | Implementation |
 |----------------|----------------|
@@ -328,65 +328,41 @@ Menu:
 | 🧹 **Auto cleanup** | Decrypted `*.auto.tfvars` are deleted after every apply (even on failure) |
 | 🛡️ **VM protection** | `prevent_destroy = true` — a VM is never deleted by accident |
 | 🔒 **SSH key only** | Password authentication disabled (cloud-init default) |
-| 📋 **Audit** | Terraform state + backup history + validation messages |
+| 📋 **Audit trail** | Terraform state + backup history + guest `/var/log/sudo.log` |
 
 > 💡 Only `credentials.tfvars` is encrypted — inventory (`datacenter`, `datastore`, …)
 > stays in readable plaintext so the team can see *where* things live without secrets.
 
 ---
 
-### 7. Monitoring & Observability
-
-```
-# Check cloud-init status per VM:
-terraform output cloud_init_status
-# → ssh ubuntu@<ip> sudo cloud-init status
-```
-
-**Optional node_exporter** — flip one flag in the VM config:
-
-```hcl
-enable_node_exporter = true
-```
-
-The VM auto-installs Prometheus `node_exporter`, ready to be scraped by Prometheus / Grafana.
-
----
-
-### 8. Pre-Deploy Validation
+### 8. Pre-Deploy Validation & Safety Gates
 
 Mistakes are caught **before** they reach vSphere:
 
-- ✅ **Duplicate IP guard** — a built-in Terraform `check` refuses two VMs on the same IP:
-  ```
-  ERROR: Duplicate IPs: ["198.51.100.110","198.51.100.110"].
-  Each VM must have a unique ip_address.
-  ```
-- ✅ **Config blending guard** — malformed per-VM files fail fast (§4)
-- ✅ **R5 state reconciliation** — stale state entries are detected, never silently destroyed
-- ✅ **Provider refresh** — templates, networks, and datastores are re-verified against vCenter
+- ✅ **Declared IP Subnet CIDR Validation**: The CLI verifies that the target VM's static IP falls strictly within the network's defined subnet CIDR before generating Terraform resources.
+- ✅ **Duplicate IP Guard**: A built-in Terraform `check` block refuses two VMs on the same IP.
+- ✅ **Reboot-Tolerant SSH Gate**: A polling gate (15 attempts × 20s interval = 300s window) waits for cloud-init completion. If 5 consecutive attempts yield key-denied, it bails out early; on timeout, an automated ICMP VLAN diagnostic checks reachability.
+- ✅ **Config Blending Guard**: Malformed per-VM files fail fast before synthesis.
+- ✅ **R5 State Reconciliation**: Stale state entries are flagged with warnings, never silently destroyed.
 
 ---
 
-### 9. Safe Destroy — nothing disappears by accident
+### 9. Safe Destroy — state-protected lifecycle
 
-- **`prevent_destroy = true`** on every VM resource — even a bare `terraform destroy` can't take it down
-- **R5 (deploy-sync)** — deleting a config file never deletes the VM; you get a warning and an explicit action
-- No auto-destroy, ever — whether the config is missing or the VM vanished from vCenter
+VMPilot provides explicit, safety-guarded VM decommissioning via `scripts/destroy.sh`:
 
-To remove a VM today (explicit, manual):
+- **Automatic Pre-Destroy State Backup**: Creates an immutable timestamped backup of the target environment's state file before making any changes.
+- **Step W4 (Safe State Removal)**: Cleans the VM resource (`module.vm["<vm>"]`) from the Terraform state using `terraform state rm`.
+- **Step W5 (vSphere Deletion)**: Deletes the virtual machine in vSphere via `govc vm.destroy`.
+- **Operator Safety Flags**: Supports `--plan` (dry-run review), `--yes` (scripted confirmation), and `--keep-config` (retains the `.tfvars` file for quick redeployment).
 
 ```bash
-# 1. Remove it from state (the VM is orphaned in vCenter):
-terraform -chdir=terraform state rm \
-  -state=terraform/terraform.dc_pilot_192.0.2.10.dev.tfstate \
-  'module.vm["<vm-name>"].vsphere_virtual_machine.this'
+# Decommission a VM safely:
+bash scripts/destroy.sh dc_pilot_192.0.2.10 dev web-01
 
-# 2. Delete the VM in vCenter:
-govc vm.destroy "<vm-name>"
+# Dry-run check:
+bash scripts/destroy.sh dc_pilot_192.0.2.10 dev web-01 --plan
 ```
-
-> 🚧 A polished `destroy.sh` wrapper (state backup + `type DESTROY to confirm`) is on the roadmap.
 
 ---
 
@@ -435,34 +411,30 @@ terraform/terraform.dc_pilot_192.0.2.10.staging.tfstate
 
 **Onboarding a new vCenter is automatic:**
 
-```
+```bash
 bash scripts/vcenter-setup.sh    # → "Create NEW" → server + datacenter
 ```
 
 This single command creates everything:
-- `deploy/<datacenter>_<server>/{dev,prod,staging}/` — config directories
-- `secure/<datacenter>_<server>/credentials.tfvars` — encrypted credentials (SOPS)
-- `secure/<datacenter>_<server>/vcenter.tfvars` — plaintext inventory
-- `secure/<datacenter>_<server>/{dev,prod,staging}/vcenter.tfvars` — per-env override templates
+- `deploy/<server>/<vcenter>/{dev,prod,staging}/` — config directories
+- `secure/<server>/credentials.tfvars` — encrypted credentials (SOPS)
+- `secure/<server>/<vcenter>/vcenter.tfvars` — plaintext inventory
+- `secure/<server>/<vcenter>/{dev,prod,staging}/vcenter.tfvars` — per-env override templates
 
 **Per-environment overrides** — need a different datastore/network/resource_pool in prod only?
 
 ```hcl
-# secure/dc_pilot_192.0.2.10/prod/vcenter.tfvars
+# secure/192.0.2.10/dc_pilot/prod/vcenter.tfvars
 datastores = ["datastore99"]   # ← prod only; dev/staging inherit the top-level default
 ```
 
 - Load order: top-level `vcenter.tfvars` → per-env → **per-env wins per key**
 - Commented/absent keys fall back to the top-level value
 - Allowed keys: `datacenter`, `clusters`, `templates`, `datastores`, `networks`,
-  `resource_pools` (OPTIONAL per-env pinning — default is govc auto-discovery at
+  `resource_pools` (optional per-env pinning — default is govc auto-discovery at
   VM-create time), plus network/IPAM: `domain`, `gateway`, `netmask`, `dns_servers`,
   `network_subnets`, `network_hosts`
-- **Credentials are never per-env** — secrets live only in `secure/<dir>/credentials.tfvars`
-
-> 📖 **Deep dive:** [docs/platfrom_and_env_features/README.md](docs/platfrom_and_env_features/README.md) — full
-> multi-vCenter architecture, onboarding wizard, override model, config layering,
-> policy re-sync, and IPAM/network design.
+- **Credentials are never per-env** — secrets live only in `secure/<server>/credentials.tfvars`
 
 ---
 
@@ -476,8 +448,10 @@ datastores = ["datastore99"]   # ← prod only; dev/staging inherit the top-leve
 | CPU | 1–256 | Prompt |
 | Memory | 512 MB – 2 TB | Prompt |
 | Network | DHCP / Static | Static |
-| Extra users | Username + password | Optional |
+| Extra users | Username + password + group role | Optional |
 | Auto-updates | Disable for prod | Optional |
+
+---
 
 ### 13. S3 Remote-State Backend
 
@@ -496,12 +470,12 @@ The complete journey — from an empty server to a hardened, production-ready VM
 |-------|------|--------------|-------|
 | 0 | **Bootstrap the host** | Detect + install every dependency: Terraform, govc, SOPS, age, jq… plus keys & `terraform init` (idempotent) | `install.sh --yes` |
 | 1 | **Onboard vCenter** | Register server + datacenter → auto-creates `deploy/` + `secure/` dirs, per-env overrides, and encrypts credentials | `vcenter-setup.sh` |
-| 2 | **Prepare the template** | One-time per vCenter: Ubuntu with `open-vm-tools` + cloud-init + VMware GuestInfo, LVM-friendly partitioning | manual (documented) |
-| 3 | **Create the config** | Answer 3 prompts → free IP auto-assigned, LVM layout, SSH key, users | `create-vm-config.sh` |
+| 2 | **Prepare the template** | One-time per vCenter: Ubuntu with `open-vm-tools` + cloud-init + VMware GuestInfo, LVM-friendly partitioning | manual |
+| 3 | **Create the config** | Answer prompts → free IP auto-assigned, LVM layout, SSH key, RBAC groups | `create-vm-config.sh` |
 | 4 | **Deploy** | One VM targeted, others untouched — or drop the file and let the loop do it | `deploy-vm.sh` / `deploy-sync.sh` |
-| 5 | **Verify** | Confirm IPs + cloud-init completion, SSH in | `terraform output vms` / `cloud_init_status` |
+| 5 | **Verify & Harden** | Confirm SSH gate, run OS hardening script, verify 19 CHECK probes | automated during deploy |
 | 6 | **Production hardening** | Auto-updates off (default), optional Prometheus `node_exporter` — baked into the deploy | config flags |
-| 7 | **Backup & lifecycle** | Rotating backups, safe destroy (nothing disappears by accident) | `backup.sh` |
+| 7 | **Backup & lifecycle** | Rotating backups, safe destroy (`destroy.sh` with state protection) | `backup.sh` / `destroy.sh` |
 
 **The result** — in about **2–3 minutes** a production-grade VM lands:
 
@@ -509,6 +483,8 @@ The complete journey — from an empty server to a hardened, production-ready VM
 - ✅ Static IP + DNS + gateway, no IP conflicts (guarded)
 - ✅ LVM + swap provisioned with a sensible partition layout
 - ✅ SSH-key-only access (no passwords)
+- ✅ 19-point CIS-aligned OS hardening verified
+- ✅ Per-environment Linux RBAC and sudo command logging active
 - ✅ Auto-updates disabled for stable, predictable behavior
 - ✅ Optional `node_exporter` running, ready for Prometheus / Grafana
 - ✅ Your config file stayed in sync — the truth is on disk
@@ -568,7 +544,7 @@ bash scripts/vcenter-setup.sh
 bash scripts/create-vm-config.sh
 # → deploy/dc_pilot_192.0.2.10/dev/vm-<hostname>_<ip>.tfvars
 
-# 3. Deploy ONE VM (auto-decrypt, -target, auto-cleanup):
+# 3. Deploy ONE VM (auto-decrypt, -target, SSH gate, hardening, auto-cleanup):
 bash scripts/deploy-vm.sh dc_pilot_192.0.2.10 dev web-02
 
 # 4. Or let the sync loop do it for you:
@@ -600,29 +576,82 @@ bash scripts/backup.sh <project-root> /backups
 
 ## 🗺️ Roadmap
 
-- [ ] Standalone `pre-apply-check.sh` with an 8-point pre-flight checklist
-- [ ] `destroy.sh` wrapper with state backup + explicit confirmation
+- [x] Pre-flight safety checks (declared IP subnet CIDR validation + reboot-tolerant SSH gate)
+- [x] Decommission wrapper (`scripts/destroy.sh` with state backup + `govc vm.destroy`)
+- [x] Multi-cluster & multi-datacenter placement logic with per-env overrides
 - [x] Optional S3 remote-state backend ([`backends/s3/bootstrap.sh`](backends/s3/bootstrap.sh) · [docs](backends/s3/README.md))
-- [ ] Multi-cluster / multi-datacenter placement logic
+- [ ] Automated CIS OS benchmark compliance reporting export
 
 ---
 
-## 📞 Support
+## 📞 Support & Documentation
 
+- **Feature-Wise User & Operator Guides:** [`guides/README.md`](guides/README.md)
 - **Requirements & installation:** [`REQUIREMENTS.md`](REQUIREMENTS.md)
 - **Encrypted credentials guide:** [`secure/README.md`](secure/README.md)
 - **S3 remote-state backend:** [`backends/s3/README.md`](backends/s3/README.md)
 
-## 🖥️ Web Console (commercial add-on)
+---
 
-A Dockerized **Web Console** for VMPilot exists as a **paid add-on** — fleet
-dashboard, vCenter inventory, VM deploy wizard with live job streaming, events
-& alerting, per-VM SSH console, RBAC. It is intentionally **not part of this
-public repository**.
+## 🖥️ Enterprise Web Console (Commercial Add-On)
 
-- Purchase includes the `vmpilot-webui/` package: drop it into the project
-  root and run `./install.sh --webui`.
-- **Contact:** [engr-rakib.github.io/web](https://engr-rakib.github.io/web)
+VMPilot provides an optional **commercial Enterprise Web Console (`vmpilot-webui/`)** designed for platform engineering teams and enterprise operations that require a web-based operations cockpit alongside the open-source CLI.
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        VMPILOT ARCHITECTURE                            │
+├───────────────────────────────────┬────────────────────────────────────┤
+│   OPEN-SOURCE CLI CORE (Free)     │   ENTERPRISE WEB CONSOLE (Paid)    │
+│   • Multi-vCenter Terraform IaC   │   • Full Browser Operations UI     │
+│   • Interactive Shell Wizards     │   • 38-Privilege Granular RBAC     │
+│   • Parallel IPAM & Free-IP Calc  │   • Live SSE Pipeline Streaming    │
+│   • SOPS-Age Secret Encryption    │   • Fleet Inventory & 30s Metrics  │
+│   • Two-Phase OS Hardening (19)   │   • Multi-Channel Alert Routing    │
+│   • Linux Guest RBAC & Auditing   │   • Veeam-Grade Delta BDR Chains   │
+│   • Safe Destroy & State Guards   │   • DBeaver-Style SQL Console      │
+│   • MIT License (Zero Lock-In)    │   • Proprietary Enterprise License │
+└───────────────────────────────────┴────────────────────────────────────┘
+```
+
+### ⚖️ Side-by-Side Feature Comparison
+
+| Capability | Open-Source CLI Core | Enterprise Web Console |
+| :--- | :---: | :---: |
+| **Licensing** | **Free & Open-Source (MIT)** | **Commercial (Proprietary)** |
+| **Interface** | Terminal CLI / Bash Scripts | Responsive Browser Cockpit |
+| **Multi-vCenter IaC Engine** | Yes | Yes (Underlying Engine) |
+| **SOPS + Age Encryption** | Yes | Yes (Managed via Vault) |
+| **Two-Phase OS Hardening (19 Probes)** | Yes | Yes |
+| **Linux Guest RBAC (`/etc/vmpilot-access.md`)** | Yes | Yes |
+| **Safe Decommission (`destroy.sh`)** | Yes | Yes |
+| **Granular UI RBAC (38 Privileges)** | — | Yes (Admin, App, DB, Readonly) |
+| **Real-Time Job Streaming (SSE)** | — | Yes (Live Steps & ANSI Logs) |
+| **Fleet Inventory & Telemetry** | — | Yes (30s Background Polling) |
+| **Enterprise Alert Routing** | — | Yes (Telegram, Email, WhatsApp, Bell) |
+| **Delta BDR & Hot Restore** | Simple `.tar.gz` | Yes (Delta Chains & SQLite WAL) |
+| **Read-Only SQL Explorer & Query Console** | — | Yes (500-Row Cap & Redaction) |
+| **AI Incident RCA Diagnostics** | — | Yes (Interactive RCA Engine) |
+
+### 🚀 Zero-Friction Upgrade Path
+
+The Enterprise Web Console sits directly on top of the open-source CLI. It requires **zero state migration** and introduces **zero vendor lock-in**:
+
+1. Obtain the licensed `vmpilot-webui/` package from the author.
+2. Drop `vmpilot-webui/` into your existing VMPilot project root.
+3. Deploy the containerized appliance:
+   ```bash
+   bash install.sh --webui
+   ```
+4. Access your HTTPS operations cockpit at `https://<your-host>:8443`.
+
+> Both the CLI and Web Console share the exact same configuration files (`deploy/`), encrypted credentials (`secure/`), and Terraform state files (`terraform/`). You can switch between CLI and Web Console at any time.
+
+### 💼 Commercial Licensing & Inquiries
+
+For commercial licensing, enterprise support tiers, or private appliance bundles:
+- **Author:** [Rakibuzzaman (Engr. Rakib)](https://engr-rakib.github.io/web)
+- **Email:** [rakibcse47@gmail.com](mailto:rakibcse47@gmail.com)
+- **Website:** [engr-rakib.github.io/web](https://engr-rakib.github.io/web)
 
 ---
 

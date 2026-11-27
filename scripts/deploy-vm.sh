@@ -400,6 +400,70 @@ fi
 # `$${` so the terraform heredoc renders it back untouched.
 build_hardening_script() {
   local _d="${ROOT_DIR}/$(vdir_for secure "$VCENTER")" _f _content=""
+  local _defaults_conf="${_d}/vm-defaults.conf"
+  local _defaults_env=""
+
+  # Tier-1 Datacenter Policy Defaults from vm-defaults.conf (fallback vars)
+  if [ -f "$_defaults_conf" ]; then
+    _defaults_env+="# ── Hardening Fallbacks from vm-defaults.conf ──"$'\n'
+    while IFS='=' read -r k v || [ -n "$k" ]; do
+      [[ "$k" =~ ^[[:space:]]*# ]] && continue
+      [[ -z "${k// }" ]] && continue
+      k="$(echo "$k" | tr -d ' ')"
+      # Strip inline comment if any
+      v="${v%%#*}"
+      # Trim leading/trailing whitespace
+      v="$(echo "$v" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+      # Strip surrounding quotes if present
+      if [[ "$v" =~ ^\"(.*)\"$ ]]; then
+        v="${BASH_REMATCH[1]}"
+      elif [[ "$v" =~ ^\'(.*)\'$ ]]; then
+        v="${BASH_REMATCH[1]}"
+      fi
+      case "$k" in
+        DEFAULT_SUDO_ADMIN_USERS)    _defaults_env+="DEFAULT_SUDO_ADMIN_USERS=\"$v\""$'\n' ;;
+        DEFAULT_SUDO_ADMIN_PASSWORD) _defaults_env+="DEFAULT_SUDO_ADMIN_PASSWORD=\"$v\""$'\n' ;;
+        DEFAULT_ROOT_PASSWORD)       _defaults_env+="DEFAULT_ROOT_PASSWORD=\"$v\""$'\n' ;;
+        DEFAULT_FIREWALL)            _defaults_env+="DEFAULT_FIREWALL=\"$v\""$'\n' ;;
+        DEFAULT_PORTS)               _defaults_env+="DEFAULT_PORTS=\"$v\""$'\n' ;;
+        DEFAULT_NTP1)                _defaults_env+="DEFAULT_NTP1=\"$v\""$'\n' ;;
+        DEFAULT_NTP2)                _defaults_env+="DEFAULT_NTP2=\"$v\""$'\n' ;;
+        DEFAULT_TIMEZONE)            _defaults_env+="DEFAULT_TIMEZONE=\"$v\""$'\n' ;;
+        DEFAULT_NE_VERSION)          _defaults_env+="DEFAULT_NE_VERSION=\"$v\""$'\n' ;;
+        DEFAULT_NE_REPO)             _defaults_env+="DEFAULT_NE_REPO=\"$v\""$'\n' ;;
+        DEFAULT_SSH_PORT)            _defaults_env+="DEFAULT_SSH_PORT=\"$v\""$'\n' ;;
+        DEFAULT_ROOT_LOGIN)          _defaults_env+="DEFAULT_ROOT_LOGIN=\"$v\""$'\n' ;;
+        DEFAULT_SSH_PASSWORD_AUTH)   _defaults_env+="DEFAULT_SSH_PASSWORD_AUTH=\"$v\""$'\n' ;;
+        DEFAULT_SSH_MAX_AUTH_TRIES)  _defaults_env+="DEFAULT_SSH_MAX_AUTH_TRIES=\"$v\""$'\n' ;;
+        DEFAULT_SSH_IDLE_TIMEOUT)    _defaults_env+="DEFAULT_SSH_IDLE_TIMEOUT=\"$v\""$'\n' ;;
+        DEFAULT_SSH_BANNER)          _defaults_env+="DEFAULT_SSH_BANNER=\"$v\""$'\n' ;;
+        DEFAULT_SYSCTL_HARDENING)    _defaults_env+="DEFAULT_SYSCTL_HARDENING=\"$v\""$'\n' ;;
+        DEFAULT_FAIL2BAN_ENABLED)    _defaults_env+="DEFAULT_FAIL2BAN_ENABLED=\"$v\""$'\n' ;;
+        DEFAULT_FAIL2BAN_MAXRETRY)   _defaults_env+="DEFAULT_FAIL2BAN_MAXRETRY=\"$v\""$'\n' ;;
+        DEFAULT_FAIL2BAN_BANTIME)    _defaults_env+="DEFAULT_FAIL2BAN_BANTIME=\"$v\""$'\n' ;;
+        DEFAULT_AUDITD_ENABLED)      _defaults_env+="DEFAULT_AUDITD_ENABLED=\"$v\""$'\n' ;;
+        DEFAULT_PASS_MAX_DAYS)       _defaults_env+="DEFAULT_PASS_MAX_DAYS=\"$v\""$'\n' ;;
+        DEFAULT_PASS_MIN_LEN)        _defaults_env+="DEFAULT_PASS_MIN_LEN=\"$v\""$'\n' ;;
+        DEFAULT_UNATTENDED_SECURITY_UPDATES) _defaults_env+="DEFAULT_UNATTENDED_SECURITY_UPDATES=\"$v\""$'\n' ;;
+        DEFAULT_CLAMAV)              _defaults_env+="DEFAULT_CLAMAV=\"$v\""$'\n' ;;
+        DEFAULT_SELINUX_TOOLS)       _defaults_env+="DEFAULT_SELINUX_TOOLS=\"$v\""$'\n' ;;
+        DEFAULT_SSH_ALLOW_CIDRS)     _defaults_env+="DEFAULT_SSH_ALLOW_CIDRS=\"$v\""$'\n' ;;
+        DEFAULT_ALLOW_CIDR_RULES)    _defaults_env+="DEFAULT_ALLOW_CIDR_RULES=\"$v\""$'\n' ;;
+        DEFAULT_BLOCK_CIDRS)         _defaults_env+="DEFAULT_BLOCK_CIDRS=\"$v\""$'\n' ;;
+        DEFAULT_ICMP_PING_ALLOW)     _defaults_env+="DEFAULT_ICMP_PING_ALLOW=\"$v\""$'\n' ;;
+        DEFAULT_OUTBOUND_ISOLATION)  _defaults_env+="DEFAULT_OUTBOUND_ISOLATION=\"$v\""$'\n' ;;
+        DEFAULT_OUTBOUND_ALLOW_CIDRS) _defaults_env+="DEFAULT_OUTBOUND_ALLOW_CIDRS=\"$v\""$'\n' ;;
+        DEFAULT_SUDO_MODE)           _defaults_env+="DEFAULT_SUDO_MODE=\"$v\""$'\n' ;;
+        DEFAULT_SUDO_COMMAND_LOG)    _defaults_env+="DEFAULT_SUDO_COMMAND_LOG=\"$v\""$'\n' ;;
+        DEFAULT_LOCKED_USERS)        _defaults_env+="DEFAULT_LOCKED_USERS=\"$v\""$'\n' ;;
+      esac
+    done < "$_defaults_conf"
+  fi
+
+  if [ -n "$_defaults_env" ]; then
+    _content+="$_defaults_env"$'\n'
+  fi
+
   # DC file always applies when present; env file applies ONLY when it
   # differs (a fresh env seed is byte-identical to the DC file — running both
   # would duplicate every step).
@@ -629,13 +693,41 @@ lan_up() {
       || warn "power-on failed — start it from vCenter console"
   fi
   local _ip="" _i=0
-  pstep deploy-vm guest-ip start "waiting for VMware guest IPv4"
-  while [ "$_i" -lt 60 ]; do
-    _ip=$(timeout 20 govc vm.ip -v4 "$VM_NAME" 2>/dev/null || true)
+  local _configured_ip=""
+  if [ -n "${CONFIG_FILE:-}" ] && [ -f "$CONFIG_FILE" ]; then
+    _configured_ip="$(grep -oE 'ip_address[[:space:]]*=[[:space:]]*"[0-9.]+"' "$CONFIG_FILE" | grep -oE '[0-9.]+' | head -n1 || true)"
+  fi
+  local _timeout_sec="${VMPILOT_GUEST_IP_TIMEOUT:-120}"
+  local _max_ip_attempts=$(( _timeout_sec / 5 ))
+  [ "$_max_ip_attempts" -lt 6 ] && _max_ip_attempts=6
+
+  pstep deploy-vm guest-ip start "waiting for VMware guest IPv4 (timeout ${_timeout_sec}s)"
+  while [ "$_i" -lt "$_max_ip_attempts" ]; do
+    # 1. Fast path: if configured static IP is already reachable on port 22 or responds to ping
+    if [ -n "$_configured_ip" ]; then
+      if timeout 1 bash -c "</dev/tcp/${_configured_ip}/22" 2>/dev/null || ping -c 1 -W 1 "$_configured_ip" >/dev/null 2>&1; then
+        _ip="$_configured_ip"
+        info "guest IP detected early via direct connectivity probe (${_ip})"
+        break
+      fi
+    fi
+
+    # 2. Query VMware tools via govc
+    _ip=$(govc vm.ip -v4 -wait=5s "$VM_NAME" 2>/dev/null || timeout 5 govc vm.ip -v4 "$VM_NAME" 2>/dev/null || true)
+    _ip="$(echo "$_ip" | grep -oE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
     [ -n "$_ip" ] && break
+
     sleep 5; _i=$((_i+1))
   done
-  if [ -n "$_ip" ]; then ok "Guest IPv4: ${_ip}"; pstep deploy-vm guest-ip done "${_ip}"; else warn "no guest IP yet — cloud-init may still run; retry: govc vm.ip -v4 ${VM_NAME}"; pstep deploy-vm guest-ip fail "timeout"; fi
+
+  if [ -n "$_ip" ]; then
+    ok "Guest IPv4: ${_ip}"
+    pstep deploy-vm guest-ip done "${_ip}"
+  else
+    error "no guest IP acquired after ${_timeout_sec}s — VMware Tools not reporting or network down; retry: govc vm.ip -v4 ${VM_NAME}"
+    pstep deploy-vm guest-ip fail "timeout"
+    _HARDEN_FAILED=1
+  fi
   # SSH readiness: cloud-init finishes users/ssh AFTER the IP appears
   # (LVM/mkfs can take minutes first) — retry up to 10 min instead of
   # failing cloud-init confirm + hardening on first refusal.
@@ -650,15 +742,15 @@ lan_up() {
     if [ -n "$_arpdev" ]; then ip neigh del "$_ip" dev "$_arpdev" >/dev/null 2>&1 || true; fi
     _i=0; _t0=$(date +%s); _last_err=""; _out=""
     _denied=0; _neterr=0
-    # Fresh clone: cloud-init's disk/LVM stages can take 10-25 min on slow
-    # storage BEFORE users/ssh are ready. Budget 30 min for network-level
-    # waits (port closed/refused) — but a DENIED key never heals by waiting:
-    # 5 consecutive denials fail fast with a key-focused message.
+    # Fresh clone: cloud-init's disk/LVM stages can take 3-5 min on slow
+    # storage BEFORE users/ssh are ready. Default max attempts = 15 (300s / 5 min).
+    # Overridable via VMPILOT_SSH_GATE_MAX_ATTEMPTS.
     # Heartbeat markers keep the pipeline UI live during the wait.
+    _max_attempts="${VMPILOT_SSH_GATE_MAX_ATTEMPTS:-15}"
     pstep deploy-vm ssh-gate start
-    while [ "$_i" -lt 90 ]; do
+    while [ "$_i" -lt "$_max_attempts" ]; do
       if ! timeout 5 bash -c "</dev/tcp/${_ip}/22" 2>/dev/null; then
-        _last_err="port 22 closed/unreachable (attempt $((_i+1)))"
+        _last_err="port 22 closed/unreachable (attempt $((_i+1))/${_max_attempts})"
         _neterr=$((_neterr+1)); _denied=0
       else
         _out="$("${_SSH_ARR[@]}" "ubuntu@${_ip}" "echo SSH-READY" 2>/tmp/lanup-ssherr || true)"
@@ -676,13 +768,35 @@ lan_up() {
         fi
       fi
       sleep 20; _i=$((_i+1))
-      if [ $((_i % 15)) -eq 0 ]; then
+      if [ $((_i % 5)) -eq 0 ] || [ $((_i % 15)) -eq 0 ]; then
         _hbst=$(govc vm.info -json "$VM_NAME" 2>/dev/null | jq -r '[.virtualMachines[]? | "\(.runtime.powerState)/\(.guest.toolsStatus // "none")" ] | join(",")' 2>/dev/null || true)
-        pstep deploy-vm ssh-gate start "waiting $(( $(date +%s) - _t0 ))s (neterr=${_neterr}${_hbst:+,${_hbst}})"
+        pstep deploy-vm ssh-gate start "waiting $(( $(date +%s) - _t0 ))s (attempt ${_i}/${_max_attempts}, neterr=${_neterr}${_hbst:+,${_hbst}})"
       fi
     done
-    info "LAN: SSH gate took $(( $(date +%s) - _t0 ))s over $((_i+1)) attempt(s)${_last_err:+; last error: ${_last_err}}"
-    if [ "$_i" -ge 90 ]; then pstep deploy-vm ssh-gate fail "timeout-1800s"; _gate_failed=1; elif [ "$_denied" -ge 5 ]; then :; else pstep deploy-vm ssh-gate done "$((_i+1))-attempts"; fi
+    _elapsed=$(( $(date +%s) - _t0 ))
+    info "LAN: SSH gate took ${_elapsed}s over $((_i+1)) attempt(s)${_last_err:+; last error: ${_last_err}}"
+    if [ "$_i" -ge "$_max_attempts" ]; then
+      pstep deploy-vm ssh-gate fail "timeout-${_elapsed}s"
+      _gate_failed=1
+    elif [ "$_denied" -ge 5 ]; then
+      :
+    else
+      pstep deploy-vm ssh-gate done "$((_i+1))-attempts"
+    fi
+
+    # Fail-Fast: if SSH gate failed, diagnose immediately and abort without wasting 46+ min
+    if [ "${_gate_failed:-0}" = "1" ]; then
+      local _icmp_st="unreachable"
+      if ping -c 1 -W 2 "$_ip" >/dev/null 2>&1; then _icmp_st="reachable"; fi
+      warn "SSH/ICMP unreachable on ${_ip}:22 after ${_elapsed}s (ICMP=${_icmp_st})"
+      echo "  Diagnostic: check vCenter portgroup/VLAN mismatch (e.g. VLAN-tagged dvPortgroup vs untagged VM Network), gateway routing, or guest firewall/sshd."
+      pstep deploy-vm cloud-init skip "ssh-gate-failed"
+      pstep deploy-vm hardening skip "ssh-gate-failed"
+      pstep deploy-vm checks skip "ssh-gate-failed"
+      pstep deploy-vm pipeline fail "ssh-unreachable"
+      unset GOVC_PASSWORD GOVC_URL GOVC_USERNAME
+      return 1
+    fi
   fi
   # Phase 4 (best-effort): confirm cloud-init finished over SSH. Needs the
   # operator's key for ubuntu@IP (agent or ~/.ssh default) — failure here is
@@ -869,7 +983,7 @@ if [ "$MODE" = "plan" ]; then
   pstep deploy-vm plan start
   _PLAN_LOG="$(mktemp "/tmp/vmpilot-plan-XXXXXX.log")"
   set +e
-  terraform -chdir="$TF_DIR" plan \
+  terraform -chdir="$TF_DIR" plan -compact-warnings \
     -state="${STATE_FILE}" \
     -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}" "${TARGET_VM_ARGS[@]}" 2>&1 | tee "${_PLAN_LOG}"
   _TF_RC=${PIPESTATUS[0]}
@@ -909,7 +1023,7 @@ else
   set +e
   # 30-min cap: a hung vSphere task (datastore/array stall) must not hold the
   # job forever — timeout kills it, rc=124 maps to a clear marker below.
-  timeout 1800 terraform -chdir="$TF_DIR" apply -auto-approve \
+  timeout 1800 terraform -chdir="$TF_DIR" apply -auto-approve -compact-warnings \
     -state="${STATE_FILE}" \
     -var-file="${VAR_FILE}" "${ROLES_ARGS[@]}" "${TARGET_ARGS[@]}" "${TARGET_VM_ARGS[@]}" 2>&1 | tee "${_APPLY_LOG}"
   _TF_RC=${PIPESTATUS[0]}

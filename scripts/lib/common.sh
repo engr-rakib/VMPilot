@@ -95,6 +95,10 @@ pipeline_log_header() { # $1=script-name (rest of $0/$* auto)
 # ─── Author banner ────────────────────────────────────────────────────────
 # Printed on every script run so the project's origin is always visible.
 vmpilot_banner() {
+  if [ -n "${VMPILOT_BANNER_PRINTED:-}" ]; then
+    return 0
+  fi
+  export VMPILOT_BANNER_PRINTED=1
   echo -e "${CYAN}================================================================================${NC}"
   echo -e "${CYAN}${BOLD}  VMPilot${NC}  -  VMware vSphere Automation"
   echo -e "${GREEN}${BOLD}  (c) 2026 Rakibuzzaman (Engr. Rakib)${NC}  -  Original author"

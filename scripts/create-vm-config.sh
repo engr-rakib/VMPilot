@@ -322,16 +322,22 @@ pipeline_tee_on
 echo ":: STEP create-vm-config:identity done ${VM_NAME} ts=$(date +%s)" >> "$PIPELINE_LOG" 2>/dev/null || true
 
 # Common server administrators (fleet-wide break-glass accounts). Stored in
-# the DC hardening.sh (COMMON_USERS=...) so every future VM of this platform
+# the DC hardening.sh (SUDO_ADMIN_USERS=... / COMMON_USERS=...) so every future VM of this platform
 # gets them — this prompt is the control point at creation time.
 _DC_HARDEN="${SCRIPT_DIR}/../${NSEC}/hardening.sh"
-_CUR_ADMINS="$(grep -oP '^COMMON_USERS="\K[^"]*' "$_DC_HARDEN" 2>/dev/null | head -1 || true)"
+_CUR_ADMINS="$(grep -oP '^(SUDO_ADMIN_USERS|COMMON_USERS)="\K[^"]*' "$_DC_HARDEN" 2>/dev/null | head -1 || true)"
 prompt_optional VM_ADMINS "Common server admins, space list (empty=none)" "$_CUR_ADMINS"
 if [ "${VM_ADMINS:-}" != "${_CUR_ADMINS:-}" ] && [ -f "$_DC_HARDEN" ]; then
   _esc="$(printf '%s' "$VM_ADMINS" | sed -e 's/[\/&]/\\&/g')"
-  sed -i -E "s/^COMMON_USERS=\".*\"/COMMON_USERS=\"$_esc\"/" "$_DC_HARDEN" \
-    && ok_inline "DC policy updated: COMMON_USERS='${VM_ADMINS:-<empty>}'" \
-    || warn "Could not update COMMON_USERS in ${_DC_HARDEN#../} — edit by hand."
+  if grep -q '^SUDO_ADMIN_USERS=' "$_DC_HARDEN"; then
+    sed -i -E "s/^SUDO_ADMIN_USERS=\".*\"/SUDO_ADMIN_USERS=\"$_esc\"/" "$_DC_HARDEN" \
+      && ok_inline "DC policy updated: SUDO_ADMIN_USERS='${VM_ADMINS:-<empty>}'" \
+      || warn "Could not update SUDO_ADMIN_USERS in ${_DC_HARDEN#../} — edit by hand."
+  else
+    sed -i -E "s/^COMMON_USERS=\".*\"/COMMON_USERS=\"$_esc\"/" "$_DC_HARDEN" \
+      && ok_inline "DC policy updated: COMMON_USERS='${VM_ADMINS:-<empty>}'" \
+      || warn "Could not update COMMON_USERS in ${_DC_HARDEN#../} — edit by hand."
+  fi
 elif [ -n "${VM_ADMINS:-}" ] && [ ! -f "$_DC_HARDEN" ]; then
   warn "No DC hardening.sh yet — admins apply from next onboard; this VM skips common accounts."
 elif [ -n "${_CUR_ADMINS:-}" ]; then

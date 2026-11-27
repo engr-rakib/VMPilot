@@ -407,6 +407,20 @@ fi
 cd "${VMPILOT_DIR}"
 [ "$DEPS_ONLY" = false ] && ok "Project at: ${VMPILOT_DIR}"
 
+# ─── 2.1 Age Key Bridge: Native CLI (~/.config/sops/age) <-> WebUI (sops-age/) ─
+# Guarantees both Free Native CLI and Paid WebUI always share the exact same keypair.
+if [ -f "${AGE_KEY}" ] && [ ! -f "${VMPILOT_DIR}/sops-age/keys.txt" ]; then
+  mkdir -p "${VMPILOT_DIR}/sops-age"
+  cp "${AGE_KEY}" "${VMPILOT_DIR}/sops-age/keys.txt"
+  chmod 600 "${VMPILOT_DIR}/sops-age/keys.txt"
+  ok "Synced Age key from ~/.config/sops/age/keys.txt → sops-age/keys.txt (WebUI ready)"
+elif [ -f "${VMPILOT_DIR}/sops-age/keys.txt" ] && [ ! -f "${AGE_KEY}" ]; then
+  mkdir -p "$(dirname "${AGE_KEY}")"
+  cp "${VMPILOT_DIR}/sops-age/keys.txt" "${AGE_KEY}"
+  chmod 600 "${AGE_KEY}"
+  ok "Synced Age key from sops-age/keys.txt → ~/.config/sops/age/keys.txt (CLI ready)"
+fi
+
 # ─── 3. dependencies (terraform / govc / sops + system packages) ────────────
 info "Dependency check + install (terraform / govc / sops / age / jq ...)"
 PACKAGES="jq git curl wget unzip openssl ca-certificates"
@@ -492,11 +506,25 @@ if [ "$GEN_KEYS" = true ] && [ -z "${SOPS_AGE_KEY_FILE:-}" ] && [ ! -f "$AGE_KEY
     chmod 600 "$AGE_KEY"
     ok "age key created: ${AGE_KEY}"
     echo "    public key: $(age-keygen -y "$AGE_KEY")"
+    # Sync immediately to project root sops-age/keys.txt for WebUI
+    if [ -d "${VMPILOT_DIR}" ]; then
+      mkdir -p "${VMPILOT_DIR}/sops-age"
+      cp "$AGE_KEY" "${VMPILOT_DIR}/sops-age/keys.txt"
+      chmod 600 "${VMPILOT_DIR}/sops-age/keys.txt"
+      ok "Mirrored age key to: ${VMPILOT_DIR}/sops-age/keys.txt"
+    fi
   else
     warn "Skipping age key — SOPS decrypt will fail until one exists."
   fi
 elif [ -f "$AGE_KEY" ]; then
   ok "age key already present: ${AGE_KEY}"
+  # Ensure sops-age/keys.txt exists in project root as well
+  if [ -d "${VMPILOT_DIR}" ] && [ ! -f "${VMPILOT_DIR}/sops-age/keys.txt" ]; then
+    mkdir -p "${VMPILOT_DIR}/sops-age"
+    cp "$AGE_KEY" "${VMPILOT_DIR}/sops-age/keys.txt"
+    chmod 600 "${VMPILOT_DIR}/sops-age/keys.txt"
+    ok "Mirrored age key to: ${VMPILOT_DIR}/sops-age/keys.txt"
+  fi
 fi
 
 if [ "$GEN_KEYS" = true ] && [ -z "$SSH_PUB" ]; then

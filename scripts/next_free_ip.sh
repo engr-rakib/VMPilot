@@ -100,13 +100,18 @@ fi
 # If range_end given, scan no further than the last IP of the block and never
 # cross the block boundary (e.g. .200 for a /24 deploy range).
 BLOCK_LAST=""
-if [ -n "$RANGE_END" ] && [[ "$RANGE_END" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-  BLOCK_LAST="$RANGE_END"
+if [ -n "$RANGE_END" ]; then
+  if [[ "$RANGE_END" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    BLOCK_LAST="$RANGE_END"
+  elif [[ "$RANGE_END" =~ ^[0-9]+$ ]]; then
+    IFS='.' read -r _b1 _b2 _b3 _b4 <<< "$BASE_IP"
+    BLOCK_LAST="${_b1}.${_b2}.${_b3}.${RANGE_END}"
+  fi
 fi
 MAX_ATTEMPTS=$(if [ -n "$BLOCK_LAST" ]; then
   IFS='.' read -r _a _b _c _d <<< "$BASE_IP"
   IFS='.' read -r _e _f _g _h <<< "$BLOCK_LAST"
-  n=$(( (_h - _d) + 1 )); [ "$n" -gt 0 ] && echo "$n" || echo "$MAX_ATTEMPTS"
+  n=$(( _h - _d )); [ "$n" -ge 0 ] && echo "$n" || echo "$MAX_ATTEMPTS"
 else echo "$MAX_ATTEMPTS"; fi)
 
 # ── Reserved IPs = the ip_address values declared in the per-VM config
@@ -156,7 +161,7 @@ for i in $(seq 0 "$MAX_ATTEMPTS"); do
   if [ -n "$BLOCK_LAST" ]; then
     IFS='.' read -r _l1 _l2 _l3 _l4 <<< "$BLOCK_LAST"
     if [ "$o1.$o2.$o3" = "$_l1.$_l2.$_l3" ] && [ $((o4 + i)) -gt "$_l4" ]; then
-      fail "No free IP found in range $BASE_IP..$BLOCK_LAST"
+      break
     fi
   fi
   # Honor a pre-assigned IP (skip_ip / or the VM's own base) — never move a

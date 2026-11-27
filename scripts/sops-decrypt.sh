@@ -9,6 +9,10 @@
 # ─── Author banner ───────────────────────────────────────────────────────
 # Printed on every run so the origin of this project is always visible.
 vmpilot_banner() {
+  if [ -n "${VMPILOT_BANNER_PRINTED:-}" ]; then
+    return 0
+  fi
+  export VMPILOT_BANNER_PRINTED=1
   local B='\033[1m' C='\033[0;36m' G='\033[0;32m' NC='\033[0m'
   echo -e "${C}================================================================================${NC}"
   echo -e "${C}${B}  VMPilot${NC}  -  VMware vSphere Automation"

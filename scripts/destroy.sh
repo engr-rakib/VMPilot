@@ -276,6 +276,38 @@ if [ -n "$TRACKED" ]; then
   terraform -chdir="$TF_DIR" state rm -state="${STATE_FILE}" \
     "${VM_RESOURCE}" ${IPAM_RESOURCE} >/dev/null 2>&1 || \
     terraform -chdir="$TF_DIR" state rm -state="${STATE_FILE}" "${VM_RESOURCE}" >/dev/null
+
+  # Prune any stale destroyed VM entries from root outputs in state file
+  if [ -f "${TF_DIR}/${STATE_FILE}" ] && command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import json, sys
+sf = sys.argv[1]
+try:
+    with open(sf, 'r') as f:
+        st = json.load(f)
+    active = set(r['module'].split('\"')[1] for r in st.get('resources', []) if r.get('module', '').startswith('module.vm'))
+    outs = st.get('outputs', {})
+    mod = False
+    for k in ['vms', 'vm_ip_addresses', 'cloud_init_status', 'disk_sizes']:
+        if k in outs and isinstance(outs[k].get('value'), dict):
+            for dead in list(outs[k]['value'].keys()):
+                if dead not in active:
+                    del outs[k]['value'][dead]
+                    mod = True
+    if 'vm_names' in outs and isinstance(outs['vm_names'].get('value'), list):
+        orig = outs['vm_names']['value']
+        filt = [n for n in orig if n in active]
+        if len(filt) != len(orig):
+            outs['vm_names']['value'] = filt
+            mod = True
+    if mod:
+        with open(sf, 'w') as f:
+            json.dump(st, f, indent=2)
+except Exception:
+    pass
+" "${TF_DIR}/${STATE_FILE}" 2>/dev/null || true
+  fi
+
   ok "Removed from state."
   pstep destroy state-rm done
 else

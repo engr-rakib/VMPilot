@@ -58,13 +58,15 @@ write_files:
         renderer: networkd
         ethernets:
 %{ for i, net in networks ~}
-          ${net.match_name != "" ? net.match_name : "ens192"}:
+          nic${i}:
+            match:
+              name: "${net.match_name != "" ? net.match_name : "e*"}"
             dhcp4: ${net.dhcp}
 %{ if net.dhcp == false ~}
             addresses:
               - ${net.ip_address}/${net.netmask}
             routes:
-              - to: default
+              - to: 0.0.0.0/0
                 via: ${net.gateway}
                 metric: ${100 + i}
             nameservers:
@@ -161,40 +163,95 @@ runcmd:
 %{ if length(os_partitions) > 0 }
   - |
     echo ":: STEP provision:disk-allocate start ts=$(date +%s)"
-    growpart /dev/sda 2 2>/dev/null || true
-    pvresize /dev/sda2
+    # Dynamically detect root LV, VG name, PV device, parent disk and partition number
+    _ROOT_SRC="$(findmnt -n -o SOURCE / 2>/dev/null || echo '')"
+    _VG="$(lvs --noheadings -o vg_name "$${_ROOT_SRC}" 2>/dev/null | tr -d '[:space:]')"
+    if [ -z "$${_VG}" ]; then
+      _VG="$(vgs --noheadings -o vg_name 2>/dev/null | head -1 | tr -d '[:space:]')"
+    fi
+    [ -z "$${_VG}" ] && _VG="vg_os"
+    echo "Detected OS Volume Group: $${_VG} (root: $${_ROOT_SRC:-unknown})"
+
+    _PV="$(pvs --noheadings -o pv_name -S "vg_name=$${_VG}" 2>/dev/null | head -1 | tr -d '[:space:]')"
+    if [ -n "$${_PV}" ] && [ -b "$${_PV}" ]; then
+      case "$${_PV}" in
+        *nvme*p[0-9]*|*mmcblk*p[0-9]*|*loop*p[0-9]*)
+          _DISK="$(echo "$${_PV}" | sed -E 's/p[0-9]+$//')"
+          _PART="$(echo "$${_PV}" | sed -E 's/^.*p([0-9]+)$/\1/')"
+          ;;
+        *)
+          _DISK="$(echo "$${_PV}" | sed -E 's/[0-9]+$//')"
+          _PART="$(echo "$${_PV}" | sed -E 's/^.*[^0-9]([0-9]+)$/\1/')"
+          ;;
+      esac
+      echo "Growing partition: disk=$${_DISK} part=$${_PART} (pv=$${_PV})"
+      growpart "$${_DISK}" "$${_PART}" 2>/dev/null || true
+      pvresize "$${_PV}" 2>/dev/null || true
+    else
+      echo "Fallback to default PV /dev/sda2"
+      growpart /dev/sda 2 2>/dev/null || true
+      pvresize /dev/sda2 2>/dev/null || true
+    fi
 %{ for part in os_partitions ~}
 %{ if part.mount_point == "/" }
-    lvextend -L ${part.size} /dev/vg_os/${part.lv_name}
-    resize2fs /dev/vg_os/${part.lv_name}
+    # Resize root logical volume dynamically
+    _ROOT_LV_PATH="/dev/$${_VG}/${part.lv_name}"
+    [ ! -b "$${_ROOT_LV_PATH}" ] && _ROOT_LV_PATH="$${_ROOT_SRC}"
+    if [ -n "$${_ROOT_LV_PATH}" ] && [ -b "$${_ROOT_LV_PATH}" ]; then
+      lvextend -L ${part.size} "$${_ROOT_LV_PATH}" 2>/dev/null || lvextend -l +100%FREE "$${_ROOT_LV_PATH}" 2>/dev/null || true
+      _FS_TYPE="$(findmnt -n -o FSTYPE / 2>/dev/null || echo '${part.filesystem}')"
+      if [ "$${_FS_TYPE}" = "xfs" ]; then
+        xfs_growfs / 2>/dev/null || true
+      else
+        resize2fs "$${_ROOT_LV_PATH}" 2>/dev/null || true
+      fi
+    fi
 %{ else }
 %{ if part.mount_point == "swap" }
-    if ! lvs /dev/vg_os/${part.lv_name} &>/dev/null; then
-      lvcreate -L ${part.size} -n ${part.lv_name} vg_os
+    _SWAP_DEV="/dev/$${_VG}/${part.lv_name}"
+    if ! lvs "$${_SWAP_DEV}" >/dev/null 2>&1; then
+      lvcreate -L ${part.size} -n ${part.lv_name} "$${_VG}" 2>/dev/null || true
     else
-      echo "LV ${part.lv_name} already exists, skipping"
+      echo "LV ${part.lv_name} already exists, skipping create"
     fi
-    mkswap /dev/vg_os/${part.lv_name}
-    swapon /dev/vg_os/${part.lv_name}
-    echo '/dev/vg_os/${part.lv_name} none swap sw 0 0' >> /etc/fstab
+    if [ -b "$${_SWAP_DEV}" ]; then
+      mkswap "$${_SWAP_DEV}" 2>/dev/null || true
+      swapon "$${_SWAP_DEV}" 2>/dev/null || true
+      if ! grep -qs "$${_SWAP_DEV}" /etc/fstab; then
+        echo "$${_SWAP_DEV} none swap sw,nofail 0 0" >> /etc/fstab
+      fi
+    else
+      echo "WARNING: Swap LV $${_SWAP_DEV} was not created; skipping fstab entry"
+    fi
 %{ else }
-    if ! lvs /dev/vg_os/${part.lv_name} &>/dev/null; then
-      lvcreate -L ${part.size} -n ${part.lv_name} vg_os
+    _PART_DEV="/dev/$${_VG}/${part.lv_name}"
+    if ! lvs "$${_PART_DEV}" >/dev/null 2>&1; then
+      lvcreate -L ${part.size} -n ${part.lv_name} "$${_VG}" 2>/dev/null || true
     else
-      echo "LV ${part.lv_name} already exists, skipping"
+      echo "LV ${part.lv_name} already exists, skipping create"
     fi
-    mkfs.${part.filesystem} /dev/vg_os/${part.lv_name}
-    ORIG_PERMS=$(stat -c "%a" ${part.mount_point} 2>/dev/null || echo "755")
-    TMP_MNT="/mnt/tmp_${part.lv_name}"
-    mkdir -p "$TMP_MNT"
-    mount /dev/vg_os/${part.lv_name} "$TMP_MNT"
-    cp -a ${part.mount_point}/. "$TMP_MNT/" 2>/dev/null || true
-    umount "$TMP_MNT"
-    rmdir "$TMP_MNT" 2>/dev/null || true
-    mkdir -p ${part.mount_point}
-    mount /dev/vg_os/${part.lv_name} ${part.mount_point}
-    chmod "$ORIG_PERMS" ${part.mount_point}
-    echo '/dev/vg_os/${part.lv_name} ${part.mount_point} ${part.filesystem} defaults 0 2' >> /etc/fstab
+    if [ -b "$${_PART_DEV}" ]; then
+      mkfs.${part.filesystem} "$${_PART_DEV}" 2>/dev/null || true
+      ORIG_PERMS=$(stat -c "%a" ${part.mount_point} 2>/dev/null || echo "755")
+      TMP_MNT="/mnt/tmp_${part.lv_name}"
+      mkdir -p "$TMP_MNT"
+      if mount "$${_PART_DEV}" "$TMP_MNT" 2>/dev/null; then
+        cp -a ${part.mount_point}/. "$TMP_MNT/" 2>/dev/null || true
+        umount "$TMP_MNT"
+      fi
+      rmdir "$TMP_MNT" 2>/dev/null || true
+      mkdir -p ${part.mount_point}
+      if mount "$${_PART_DEV}" ${part.mount_point} 2>/dev/null; then
+        chmod "$ORIG_PERMS" ${part.mount_point}
+        if ! grep -qs "$${_PART_DEV}" /etc/fstab; then
+          echo "$${_PART_DEV} ${part.mount_point} ${part.filesystem} defaults,nofail 0 2" >> /etc/fstab
+        fi
+      else
+        echo "WARNING: Failed to mount $${_PART_DEV} to ${part.mount_point}; skipping fstab entry to prevent boot hang"
+      fi
+    else
+      echo "WARNING: LV $${_PART_DEV} was not created; skipping mkfs and fstab entry"
+    fi
 %{ endif }
 %{ endif }
     echo ":: STEP provision:lvm-partition done ${part.lv_name} ts=$(date +%s)"
@@ -210,12 +267,50 @@ runcmd:
 %{ endif }
 %{ if ! os_has_swap }
   - |
-    if [ ! -f /swapfile ]; then
-      fallocate -l ${memory_mb * 3 / 2}M /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=${memory_mb * 3 / 2}
-      chmod 600 /swapfile
-      mkswap /swapfile
-      swapon /swapfile
-      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    if [ ! -f /swapfile ] && ! swapon --show 2>/dev/null | grep -q 'partition\|file'; then
+      _TARGET_SWAP_MB=${memory_mb * 3 / 2}
+      # Cap target swap to 4096MB if larger than 4GB to prevent disk exhaustion
+      [ "$${_TARGET_SWAP_MB}" -gt 4096 ] && _TARGET_SWAP_MB=4096
+
+      # Check if Volume Group has enough free space for an LVM swap volume
+      _VG_SWAP="$(vgs --noheadings -o vg_name,vg_free --units m 2>/dev/null | head -1)"
+      _VG_NAME="$(echo "$${_VG_SWAP}" | awk '{print $1}')"
+      _VG_FREE_MB="$(echo "$${_VG_SWAP}" | awk '{print int($2)}')"
+
+      if [ -n "$${_VG_NAME}" ] && [ "$${_VG_FREE_MB:-0}" -ge "$${_TARGET_SWAP_MB}" ]; then
+        echo "Creating LVM swap volume /dev/$${_VG_NAME}/lv_swap ($${_TARGET_SWAP_MB}M)..."
+        if lvcreate -L "$${_TARGET_SWAP_MB}M" -n lv_swap "$${_VG_NAME}" >/dev/null 2>&1; then
+          mkswap "/dev/$${_VG_NAME}/lv_swap" >/dev/null 2>&1
+          swapon "/dev/$${_VG_NAME}/lv_swap" >/dev/null 2>&1
+          if ! grep -qs "/dev/$${_VG_NAME}/lv_swap" /etc/fstab; then
+            echo "/dev/$${_VG_NAME}/lv_swap none swap sw,nofail 0 0" >> /etc/fstab
+          fi
+        fi
+      fi
+
+      # Fallback to /swapfile if LVM swap was not activated
+      if ! swapon --show 2>/dev/null | grep -q 'partition\|file'; then
+        _AVAIL_MB="$(df -Pm / 2>/dev/null | awk 'NR==2 {print $4}')"
+        _MIN_HEADROOM_MB=2048
+        _MAX_ALLOWED_SWAP_MB=$(( $${_AVAIL_MB:-0} - $_MIN_HEADROOM_MB ))
+
+        if [ "$${_MAX_ALLOWED_SWAP_MB}" -ge 512 ]; then
+          _SWAP_ALLOC_MB="$${_TARGET_SWAP_MB}"
+          [ "$${_SWAP_ALLOC_MB}" -gt "$${_MAX_ALLOWED_SWAP_MB}" ] && _SWAP_ALLOC_MB="$${_MAX_ALLOWED_SWAP_MB}"
+
+          echo "Allocating /swapfile ($${_SWAP_ALLOC_MB}M) with available disk headroom ($${_AVAIL_MB}M available)..."
+          if fallocate -l "$${_SWAP_ALLOC_MB}M" /swapfile >/dev/null 2>&1 || dd if=/dev/zero of=/swapfile bs=1M count="$${_SWAP_ALLOC_MB}" status=none; then
+            chmod 600 /swapfile
+            mkswap /swapfile >/dev/null 2>&1
+            swapon /swapfile >/dev/null 2>&1
+            if ! grep -qs '/swapfile' /etc/fstab; then
+              echo '/swapfile none swap sw,nofail 0 0' >> /etc/fstab
+            fi
+          fi
+        else
+          echo "WARNING: Low disk space on / ($${_AVAIL_MB:-0}MB available). Skipping /swapfile creation to prevent 100% full root filesystem."
+        fi
+      fi
     fi
     echo ":: STEP provision:swap done ts=$(date +%s)"
 %{ endif }
@@ -230,7 +325,7 @@ runcmd:
 %{ endfor ~}
     echo ":: STEP provision:lvm-data done ts=$(date +%s)"
 %{ for lv in lvm_config ~}
-    if ! lvs /dev/${lv.vg_name}/${lv.lv_name} &>/dev/null; then
+    if ! lvs /dev/${lv.vg_name}/${lv.lv_name} >/dev/null 2>&1; then
       lvcreate -L ${lv.lv_size} -n ${lv.lv_name} ${lv.vg_name}
     else
       echo "LV ${lv.lv_name} already exists, skipping"
